@@ -8,19 +8,23 @@ import android.view.ViewTreeObserver;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
-import com.zjun.widget.RuleView;
+import com.zjun.demo.ruleview.R;
+import com.zjun.widget.RuleView1;
 
-public class MainActivity extends AppCompatActivity {
+import java.util.ArrayList;
+import java.util.List;
+
+public class MainActivity1 extends AppCompatActivity {
 
     private TextView tvValue;
-    private RuleView gvRule;
+    private RuleView1 gvRule;
     private TextView tvRuleIndicator;
     private LinearLayout llRuleSettings;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        setContentView(R.layout.activity_main);
+        setContentView(R.layout.activity_main1);
 
         tvValue = findViewById(R.id.tv_value);
         gvRule = findViewById(R.id.gv_1);
@@ -37,13 +41,25 @@ public class MainActivity extends AppCompatActivity {
                 // 只需执行一次
                 gvRule.getViewTreeObserver().removeOnGlobalLayoutListener(this);
 
-                // 使用自动计算刻度间距的方法设置刻度尺
-                gvRule.setAutoGap(0, 4, 2, 0.1f, 10);
+                // 创建刻度规则列表
+                List<RuleView1.GradationRule> rules = new ArrayList<>();
+
+                // 添加规则：0-2x 范围内每 0.2 显示一个刻度
+                rules.add(new RuleView1.GradationRule(0f, 2.0f, 0.2f));
+
+                // 添加规则：2-4x 范围内每 0.1 显示一个刻度
+                rules.add(new RuleView1.GradationRule(2.0f, 4.0f, 0.1f));
+
+                // 设置规则
+                gvRule.setGradationRules(rules);
+
+                // 设置基本参数
+//                gvRule.setAutoGap(0, 4, 2, 0.1f, 10);
             }
         });
         
         tvValue.setText(Float.toString(gvRule.getCurrentValue()));
-        gvRule.setOnValueChangedListener(new RuleView.OnValueChangedListener() {
+        gvRule.setOnValueChangedListener(new RuleView1.OnValueChangedListener() {
             @Override
             public void onValueChanged(float value) {
                 tvValue.setText(String.format("%.1fx", value));

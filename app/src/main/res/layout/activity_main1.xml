@@ -9,7 +9,7 @@
 
 
 
-    <com.zjun.widget.RuleView
+    <com.zjun.widget.RuleView1
         android:id="@+id/gv_1"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"

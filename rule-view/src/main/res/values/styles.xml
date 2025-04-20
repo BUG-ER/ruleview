@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 刻度尺样式 -->
+    <style name="CustomRuleViewStyle">
+        <!-- 背景色 -->
+        <item name="zjun_bgColor">#F5F8F5</item>
+        <!-- 长刻度样式 -->
+        <item name="gv_longLineColor">#000000</item>
+        <item name="gv_longLineWidth">3dp</item>
+        <item name="gv_longGradationLen">16dp</item>
+        <!-- 短刻度样式 -->
+        <item name="gv_shortLineColor">#50000000</item>
+        <item name="gv_shortLineWidth">3dp</item>
+        <item name="gv_shortGradationLen">16dp</item>
+        <!-- 文字样式 -->
+        <item name="zjun_textColor">@android:color/holo_red_dark</item>
+        <item name="zjun_textSize">14sp</item>
+        <!-- 指示器样式 -->
+        <item name="zjun_indicatorLineColor">#48b975</item>
+        <item name="zjun_indicatorLineWidth">3dp</item>
+        <item name="gv_indicatorLineLen">35dp</item>
+        <!-- 刻度间距 -->
+        <item name="gv_gradationGap">10dp</item>
+        <item name="gv_gradationNumberGap">8dp</item>
+        <!-- 刻度条与文字间距 -->
+        <item name="gv_textGradationGap">15dp</item>
+    </style>
+</resources> 

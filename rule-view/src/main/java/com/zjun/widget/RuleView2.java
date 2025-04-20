@@ -18,8 +18,8 @@ import android.view.ViewConfiguration;
 import android.view.ViewGroup;
 import android.widget.Scroller;
 
-import java.lang.ref.WeakReference;
-
+import java.util.ArrayList;
+import java.util.List;
 
 
 /**
@@ -39,13 +39,13 @@ import java.lang.ref.WeakReference;
  * Description:
  * Date 2018/7/29
  */
-public class RuleView extends View {
+public class RuleView2 extends View {
     private static final boolean LOG_ENABLE = BuildConfig.DEBUG;
 
     // 默认颜色值
     private static final String DEFAULT_BG_COLOR = "#f5f8f5";
     private static final String DEFAULT_INDICATOR_COLOR = "#48b975";
-    
+
     // 默认尺寸（dp）
     private static final float DEFAULT_SHORT_LINE_WIDTH_DP = 1f;
     private static final float DEFAULT_SHORT_GRADATION_LEN_DP = 16f;
@@ -55,10 +55,10 @@ public class RuleView extends View {
     private static final float DEFAULT_GRADATION_NUMBER_GAP_DP = 8f;
     private static final float DEFAULT_TEXT_GRADATION_GAP_DP = 5f;
     private static final int DEFAULT_CONTENT_HEIGHT_DP = 90;
-    
+
     // 默认文本大小（sp）
     private static final float DEFAULT_TEXT_SIZE_SP = 14f;
-    
+
     // 默认数值
     private static final float DEFAULT_MIN_VALUE = 0f;
     private static final float DEFAULT_MAX_VALUE = 100f;
@@ -66,24 +66,24 @@ public class RuleView extends View {
     private static final float DEFAULT_GRADATION_UNIT = 0.1f;
     private static final int DEFAULT_NUMBER_PER_COUNT = 10;
     private static final float DEFAULT_SPLIT_VALUE = 2.0f;
-    
+
     // 震动相关
     private static final long VIBRATION_DURATION = 20L;  // 震动持续时间（毫秒）
-    
+
     // 动画相关
     private static final int MAX_SCROLL_DURATION = 800;  // 最大滚动动画时间（毫秒）
     private static final int MAX_VALUE_CHANGE_DURATION = 2000;  // 值变化最大动画时间（毫秒）
     private static final int ALIGN_ANIMATION_DURATION = 150;  // 对齐动画时间（毫秒）
     private static final float VELOCITY_THRESHOLD_FACTOR = 0.8f;  // 速度阈值系数
     private static final int GRADATION_CHECK_RANGE = 3;  // 刻度检查范围
-    
+
     // 文本渐变相关
     private static final float TEXT_FADE_DISTANCE_FACTOR = 4.0f;  // 文本渐变距离系数
     private static final int MAX_ALPHA = 255;  // 最大透明度值
-    
+
     // 数值转换相关
     private static final int NUMBER_MAGNIFICATION = 10;  // 数值放大倍数
-    
+
     // 扩展单位相关
     private static final int EXTEND_UNIT_SHIFT = 1;  // 扩展单位位移量
 
@@ -236,7 +236,7 @@ public class RuleView extends View {
      * 长刻度颜色
      */
     private int longLineColor;
-    
+
     /**
      * 短刻度颜色
      */
@@ -244,7 +244,7 @@ public class RuleView extends View {
 
     private boolean mUseCustomGradation = false;  // 是否使用自定义刻度显示
     private float mGradationSplitValue = 2.0f;   // 分割值，默认2.0x
-    
+
     private Vibrator mVibrator;  // 震动管理器
     private int mLastVibrationValue;  // 上次震动时的刻度值
 
@@ -255,25 +255,130 @@ public class RuleView extends View {
         void onValueChanged(float value);
     }
 
-    // 是否已释放资源
-    private boolean mIsReleased = false;
-    
-    // 使用弱引用持有Context
-    private WeakReference<Context> mContextRef;
+    /**
+     * 刻度规则类，用于定义刻度的显示规则
+     */
+    public static class GradationRule {
+        private float startValue;  // 起始值
+        private float endValue;    // 结束值
+        private float step;        // 步进值
 
-    public RuleView(Context context) {
+        public GradationRule(float startValue, float endValue, float step) {
+            this.startValue = startValue;
+            this.endValue = endValue;
+            this.step = step;
+        }
+
+        public float getStartValue() {
+            return startValue;
+        }
+
+        public float getEndValue() {
+            return endValue;
+        }
+
+        public float getStep() {
+            return step;
+        }
+    }
+
+    private List<GradationRule> mGradationRules = new ArrayList<>();
+
+    /**
+     * 设置刻度规则
+     * @param rules 刻度规则列表
+     */
+    public void setGradationRules(List<GradationRule> rules) {
+        if (rules == null || rules.isEmpty()) {
+            throw new IllegalArgumentException("Rules list cannot be null or empty");
+        }
+
+        // 验证规则的有效性
+        float lastEndValue = rules.get(0).startValue;
+        for (GradationRule rule : rules) {
+            if (rule.startValue > rule.endValue) {
+                throw new IllegalArgumentException("Start value must be less than end value");
+            }
+            if (rule.step <= 0) {
+                throw new IllegalArgumentException("Step must be greater than 0");
+            }
+            if (rule.startValue != lastEndValue) {
+                throw new IllegalArgumentException("Rules must be continuous");
+            }
+            lastEndValue = rule.endValue;
+        }
+
+        // 更新控件的基本参数
+        this.minValue = rules.get(0).startValue;
+        this.maxValue = rules.get(rules.size() - 1).endValue;
+
+        // 如果当前值超出新范围，重置为中间值
+        if (this.currentValue < this.minValue || this.currentValue > this.maxValue) {
+            this.currentValue = (this.minValue + this.maxValue) / 2;
+        }
+
+        // 找出最小步进值作为基本刻度单位
+        float minStep = Float.MAX_VALUE;
+        for (GradationRule rule : rules) {
+            minStep = Math.min(minStep, rule.step);
+        }
+        // 使用最小步进值作为基本单位
+        this.gradationUnit = minStep;
+
+        mGradationRules.clear();
+        mGradationRules.addAll(rules);
+
+        // 如果控件尚未测量，先使用常规值设置
+        if (mWidth <= 0) {
+            setValue(minValue, maxValue, currentValue, gradationUnit, numberPerCount);
+            return;
+        }
+
+        // 计算总刻度数（使用最小步进值）
+        float totalScales = (maxValue - minValue) / minStep + 1;
+
+        // 计算刻度间距（以像素为单位）
+        float calculatedGapPx = mWidth / (totalScales - 1);
+        this.gradationGap = calculatedGapPx;
+
+        // 记录日志以便调试
+        logD("setGradationRules: minValue=%f, maxValue=%f, totalScales=%f, mWidth=%d, calculatedGapPx=%f, minStep=%f",
+                minValue, maxValue, totalScales, mWidth, calculatedGapPx, minStep);
+
+        // 更新内部计算值
+        convertValue2Number();
+
+        if (mValueChangedListener != null) {
+            mValueChangedListener.onValueChanged(currentValue);
+        }
+
+        postInvalidate();
+    }
+
+    /**
+     * 根据当前值获取对应的刻度规则
+     * @param value 当前值
+     * @return 对应的刻度规则，如果没有找到则返回null
+     */
+    private GradationRule getGradationRuleForValue(float value) {
+        for (GradationRule rule : mGradationRules) {
+            if (value >= rule.startValue && value <= rule.endValue) {
+                return rule;
+            }
+        }
+        return null;
+    }
+
+    public RuleView2(Context context) {
         this(context, null);
     }
 
-    public RuleView(Context context, @Nullable AttributeSet attrs) {
+    public RuleView2(Context context, @Nullable AttributeSet attrs) {
         this(context, attrs, 0);
     }
 
-    public RuleView(Context context, @Nullable AttributeSet attrs, int defStyleAttr) {
+    public RuleView2(Context context, @Nullable AttributeSet attrs, int defStyleAttr) {
         super(context, attrs, defStyleAttr);
-        // 使用弱引用持有context
-        mContextRef = new WeakReference<>(context);
-        
         initAttrs(context, attrs);
 
         // 初始化final常量，必须在构造中赋初值
@@ -360,7 +465,7 @@ public class RuleView extends View {
             mWidthRangeNumber = (int) (mWidth / gradationGap * mNumberUnit);
         }
         // 设置测量尺寸时需要加上padding
-        setMeasuredDimension(mWidth + getPaddingLeft() + getPaddingRight(), 
+        setMeasuredDimension(mWidth + getPaddingLeft() + getPaddingRight(),
                            mHeight + getPaddingTop() + getPaddingBottom());
     }
 
@@ -403,19 +508,15 @@ public class RuleView extends View {
 
     @Override
     public boolean onTouchEvent(MotionEvent event) {
-        // 如果已释放资源，不处理触摸事件
-        if (mIsReleased) {
-            return false;
-        }
-        
         final int action = event.getAction();
         final int x = (int) event.getX();
         final int y = (int) event.getY();
-        logD("onTouchEvent: action=%d", action);
+        
         if (mVelocityTracker == null) {
             mVelocityTracker = VelocityTracker.obtain();
         }
         mVelocityTracker.addMovement(event);
+        
         switch (action) {
             case MotionEvent.ACTION_DOWN:
                 mScroller.forceFinished(true);
@@ -444,16 +545,16 @@ public class RuleView extends View {
                     float clickDistance = x - getPaddingLeft();
                     float centerDistance = mHalfWidth;
                     float offset = clickDistance - centerDistance;
-                    
+
                     // 计算点击位置对应的值
                     float targetDistance = mCurrentDistance + offset;
                     // 确保在有效范围内
                     targetDistance = Math.min(Math.max(targetDistance, 0), mNumberRangeDistance);
-                    
+
                     // 计算目标刻度值
                     float exactPosition = targetDistance / gradationGap;
                     int targetNumber = mMinNumber + Math.round(exactPosition) * mNumberUnit;
-                    
+
                     // 在0-2x范围内确保只能停在偶数刻度上
                     if (mUseCustomGradation && targetNumber <= (mGradationSplitValue * 10)) {
                         // 计算最近的偶数刻度
@@ -462,45 +563,81 @@ public class RuleView extends View {
                             // 计算与前后两个偶数刻度的距离
                             int prevEven = targetNumber - remainder;
                             int nextEven = prevEven + (mNumberUnit * 2);
-                            
+
                             // 使用实际点击位置来决定目标值
                             float clickedValue = targetNumber / 10f;
                             float prevValue = prevEven / 10f;
                             float nextValue = nextEven / 10f;
-                            
+
                             // 根据点击位置选择更近的偶数刻度
-                            targetNumber = Math.abs(clickedValue - prevValue) <= Math.abs(clickedValue - nextValue) ? 
+                            targetNumber = Math.abs(clickedValue - prevValue) <= Math.abs(clickedValue - nextValue) ?
                                          prevEven : nextEven;
                         }
                     }
-                    
+
                     // 确保目标值在范围内
                     targetNumber = Math.min(Math.max(targetNumber, mMinNumber), mMaxNumber);
-                    
+
                     // 计算最终目标距离
                     float targetDistance2 = (targetNumber - mMinNumber) / (float)mNumberUnit * gradationGap;
-                    
+
                     // 计算滚动距离和时间
                     int dx2 = (int)(targetDistance2 - mCurrentDistance);
                     int duration = Math.min(Math.abs(dx2) * 2, 800); // 最大800ms
-                    
+
                     // 开始滚动动画
                     mScroller.startScroll((int)mCurrentDistance, 0, dx2, 0, duration);
                     invalidate();
                     break;
                 }
-                
-                // 处理滑动结束
+
+                // 处理滑动结束 - 优化惯性滑动体验
                 mVelocityTracker.computeCurrentVelocity(1000, MAX_FLING_VELOCITY);
                 int xVelocity = (int) mVelocityTracker.getXVelocity();
+                
                 if (Math.abs(xVelocity) >= MIN_FLING_VELOCITY) {
-                    mScroller.fling((int)mCurrentDistance, 0, -xVelocity, 0,
-                            0, (int)mNumberRangeDistance, 0, 0);
+                    // 计算摩擦系数，使滑动更丝滑
+                    float friction = getContext().getResources().getDisplayMetrics().density * 0.84f;
+                    if (Math.abs(xVelocity) > MIN_FLING_VELOCITY * 8) {
+                        // 高速滑动时稍微减小摩擦，让滑动更远更自然
+                        friction *= 0.7f;
+                    }
+                    
+                    // 设置Scroller的摩擦系数
+                    mScroller.setFriction(friction);
+                    
+                    // 使用fling启动惯性滑动
+                    mScroller.fling(
+                        (int)mCurrentDistance,  // startX
+                        0,                      // startY
+                        -xVelocity,             // velocityX
+                        0,                      // velocityY
+                        0,                      // minX
+                        (int)mNumberRangeDistance, // maxX
+                        0,                      // minY
+                        0                       // maxY
+                    );
                     invalidate();
                 } else {
+                    // 速度低时，直接滚动到最近刻度
                     scrollToGradation();
                 }
+                
+                // 释放速度跟踪器
+                if (mVelocityTracker != null) {
+                    mVelocityTracker.recycle();
+                    mVelocityTracker = null;
+                }
                 break;
+                
+            case MotionEvent.ACTION_CANCEL:
+                // 释放速度跟踪器
+                if (mVelocityTracker != null) {
+                    mVelocityTracker.recycle();
+                    mVelocityTracker = null;
+                }
+                break;
+                
             default:
                 break;
         }
@@ -510,48 +647,86 @@ public class RuleView extends View {
     }
 
     /**
+     * 检查是否需要震动
+     */
+    private void checkVibration(int oldNumber, int newNumber) {
+        // 确保震动器可用
+        if (mVibrator == null || !mVibrator.hasVibrator()) {
+            return;
+        }
+
+        // 获取当前的移动速度
+        float velocity = 0;
+        if (mVelocityTracker != null) {
+            mVelocityTracker.computeCurrentVelocity(1000);
+            velocity = Math.abs(mVelocityTracker.getXVelocity());
+        }
+
+        // 只有在非常慢速滑动时才震动，避免快速滑动时的频繁震动导致卡顿感
+        if (velocity < MIN_FLING_VELOCITY * 0.5f) {
+            // 在0-2x范围内只在偶数刻度处震动
+            if (mUseCustomGradation && newNumber <= (mGradationSplitValue * NUMBER_MAGNIFICATION)) {
+                if (newNumber % (mNumberUnit * 2) == 0 && oldNumber != newNumber &&
+                    Math.abs(newNumber - mLastVibrationValue) >= mNumberUnit * 2) {
+                    mVibrator.vibrate(VIBRATION_DURATION);
+                    mLastVibrationValue = newNumber;
+                }
+            } else {
+                // 2x以上范围，只在整数刻度处震动，更适度地提供反馈
+                if (newNumber % 10 == 0 && oldNumber != newNumber &&
+                    Math.abs(newNumber - mLastVibrationValue) >= 10) {
+                    mVibrator.vibrate(VIBRATION_DURATION);
+                    mLastVibrationValue = newNumber;
+                }
+            }
+        }
+    }
+
+    /**
      * 根据distance距离，计算数值
      */
     private void calculateValue() {
         // 限定范围：在最小值与最大值之间
         mCurrentDistance = Math.min(Math.max(mCurrentDistance, 0), mNumberRangeDistance);
         int oldNumber = mCurrentNumber;
-        mCurrentNumber = mMinNumber + (int)(mCurrentDistance / gradationGap) * mNumberUnit;
+
+        // 使用精确的位置，避免整数舍入造成的跳动
+        float exactPosition = mCurrentDistance / gradationGap;
+        mCurrentNumber = mMinNumber + Math.round(exactPosition * mNumberUnit);
+        float oldValue = currentValue;
         currentValue = mCurrentNumber / 10f;
-        
-        // 检查是否需要震动
-        checkVibration(oldNumber, mCurrentNumber);
-        
-        logD("calculateValue: mCurrentDistance=%f, mCurrentNumber=%d, currentValue=%f",
-                mCurrentDistance, mCurrentNumber, currentValue);
-        if (mValueChangedListener != null) {
-            mValueChangedListener.onValueChanged(currentValue);
+
+        // 获取当前值对应的规则
+        GradationRule rule = getGradationRuleForValue(currentValue);
+        if (rule != null) {
+            // 判断当前值是否是规则定义的刻度值
+            float stepMultiple = currentValue / rule.step;
+            boolean isValidScale = Math.abs(Math.round(stepMultiple) - stepMultiple) < 0.001f;
+
+            // 检查是否需要震动，但仅在有效刻度且速度极慢时
+            if (isValidScale) {
+                // 获取当前的移动速度
+                float velocity = 0;
+                if (mVelocityTracker != null) {
+                    mVelocityTracker.computeCurrentVelocity(1000);
+                    velocity = Math.abs(mVelocityTracker.getXVelocity());
+                }
+                
+                // 只有在非常慢速滑动时才触发震动，提高速度阈值，使高速滑动时更加丝滑
+                if (velocity < MIN_FLING_VELOCITY * 0.3f) {
+                    checkVibration(oldNumber, mCurrentNumber);
+                }
+
+                // 只有在是有效刻度值且值发生变化时才触发回调
+                if (Math.abs(oldValue - currentValue) > 0.001f) {
+                    if (mValueChangedListener != null) {
+                        mValueChangedListener.onValueChanged(currentValue);
+                    }
+                }
+            }
         }
+
         invalidate();
-    }
-
-    /**
-     * 检查是否需要震动
-     */
-    private void checkVibration(int oldNumber, int newNumber) {
-        // 确保震动器可用且还未释放资源
-        if (mVibrator == null || !mVibrator.hasVibrator() || mIsReleased) {
-            return;
-        }
-
-        // 在0-2x范围内只在偶数刻度处震动
-        if (mUseCustomGradation && newNumber <= (mGradationSplitValue * NUMBER_MAGNIFICATION)) {
-            if (newNumber % (mNumberUnit * 2) == 0 && oldNumber != newNumber) {
-                mVibrator.vibrate(VIBRATION_DURATION);
-                mLastVibrationValue = newNumber;
-            }
-        } else {
-            // 2x以上范围在每个刻度处震动
-            if (oldNumber != newNumber) {
-                mVibrator.vibrate(VIBRATION_DURATION);
-                mLastVibrationValue = newNumber;
-            }
-        }
     }
 
     /**
@@ -560,36 +735,96 @@ public class RuleView extends View {
     private void scrollToGradation() {
         // 先计算当前实际位置对应的数值
         float exactPosition = mCurrentDistance / gradationGap;
-        mCurrentNumber = mMinNumber + Math.round(exactPosition) * mNumberUnit;
-        
-        // 在0-2x范围内确保只能停在偶数刻度上
-        if (mUseCustomGradation && mCurrentNumber <= (mGradationSplitValue * 10)) {
-            // 计算最近的偶数刻度
-            int remainder = mCurrentNumber % (mNumberUnit * 2);
-            if (remainder != 0) {
-                // 计算与前后两个偶数刻度的距离
-                int prevEven = mCurrentNumber - remainder;
-                int nextEven = prevEven + (mNumberUnit * 2);
+        float tempNumber = mMinNumber + exactPosition * mNumberUnit;
+        float tempValue = tempNumber / 10f;
+
+        // 获取当前的移动速度
+        float velocity = 0;
+        if (mVelocityTracker != null) {
+            mVelocityTracker.computeCurrentVelocity(1000);
+            velocity = Math.abs(mVelocityTracker.getXVelocity());
+        }
+
+        // 获取当前值对应的规则
+        GradationRule rule = getGradationRuleForValue(tempValue);
+        if (rule != null) {
+            float targetValue; // 目标值
+            
+            // 处理0-2x范围内的特殊规则（只停在偶数刻度）
+            if (mUseCustomGradation && tempValue <= mGradationSplitValue) {
+                // 计算当前值最接近的刻度值
+                float stepMultiple = tempValue / rule.step;
+                float roundedMultiple = Math.round(stepMultiple);
+                float nearestScaleValue = roundedMultiple * rule.step;
                 
-                // 计算实际位置与前后偶数刻度的距离
-                float currentPos = exactPosition * mNumberUnit;
-                float prevPos = prevEven;
-                float nextPos = nextEven;
-                
-                // 根据实际距离选择目标刻度
-                mCurrentNumber = (Math.abs(currentPos - prevPos) <= Math.abs(currentPos - nextPos)) ? 
+                // 计算最近的偶数刻度
+                float remainder = nearestScaleValue % (0.2f * 2);
+                if (Math.abs(remainder) > 0.001f) {
+                    // 找到前后两个偶数刻度
+                    float prevEven = nearestScaleValue - remainder;
+                    float nextEven = prevEven + (0.2f * 2);
+                    
+                    // 选择最近的偶数刻度
+                    targetValue = (Math.abs(tempValue - prevEven) <= Math.abs(tempValue - nextEven)) ? 
                                 prevEven : nextEven;
+                } else {
+                    targetValue = nearestScaleValue;
+                }
+            } else {
+                // 非0-2x范围的处理
+                // 计算最接近的刻度值
+                float stepMultiple = tempValue / rule.step;
+                float roundedMultiple = Math.round(stepMultiple);
+                targetValue = roundedMultiple * rule.step;
+            }
+            
+            // 确保在有效范围内
+            targetValue = Math.min(Math.max(targetValue, minValue), maxValue);
+            
+            // 计算目标整数值
+            int targetNumber = (int)(targetValue * 10);
+            
+            // 如果目标值与当前值不同，使用平滑滚动过渡
+            if (Math.abs(targetNumber - mCurrentNumber) > 0.001f) {
+                float targetDistance = (targetNumber - mMinNumber) / (float)mNumberUnit * gradationGap;
+                float distanceToTarget = Math.abs(targetDistance - mCurrentDistance);
+                
+                // 计算动画持续时间，速度越快，持续时间越短
+                int duration;
+                if (velocity > MIN_FLING_VELOCITY) {
+                    // 高速滚动后的对齐，使用较短时间
+                    duration = Math.min(150, (int)(distanceToTarget * 0.5f));
+                } else {
+                    // 低速或手动拖动后的对齐，使用适中时间
+                    duration = Math.min(300, (int)(distanceToTarget * 1.2f));
+                }
+                duration = Math.max(100, duration); // 确保最小动画时间
+                
+                // 启动平滑滚动
+                mScroller.startScroll(
+                    (int)mCurrentDistance,
+                    0,
+                    (int)(targetDistance - mCurrentDistance),
+                    duration
+                );
+                invalidate();
+                return;
             }
         }
         
-        mCurrentNumber = Math.min(Math.max(mCurrentNumber, mMinNumber), mMaxNumber);
-        mCurrentDistance = (mCurrentNumber - mMinNumber) / mNumberUnit * gradationGap;
+        // 如果没有找到对应规则或不需要滚动，直接更新值
+        mCurrentNumber = Math.min(Math.max(Math.round(tempNumber), mMinNumber), mMaxNumber);
+        float oldValue = currentValue;
         currentValue = mCurrentNumber / 10f;
-        logD("scrollToGradation: mCurrentDistance=%f, mCurrentNumber=%d, currentValue=%f, exactPosition=%f",
-                mCurrentDistance, mCurrentNumber, currentValue, exactPosition);
-        if (mValueChangedListener != null) {
-            mValueChangedListener.onValueChanged(currentValue);
+        mCurrentDistance = (mCurrentNumber - mMinNumber) / (float)mNumberUnit * gradationGap;
+        
+        // 只有在值发生变化时才触发回调
+        if (Math.abs(oldValue - currentValue) > 0.001f) {
+            if (mValueChangedListener != null) {
+                mValueChangedListener.onValueChanged(currentValue);
+            }
         }
+        
         invalidate();
     }
 
@@ -602,9 +837,11 @@ public class RuleView extends View {
                 // 计算当前值
                 float exactPosition = mCurrentDistance / gradationGap;
                 int tempNumber = mMinNumber + (int)(exactPosition) * mNumberUnit;
+                float tempValue = tempNumber / 10f;
                 
-                // 在0-2x范围内且启用自定义模式时，需要调整滑动终点
-                if (mUseCustomGradation && tempNumber <= (mGradationSplitValue * 10)) {
+                // 获取当前值对应的规则
+                GradationRule rule = getGradationRuleForValue(tempValue);
+                if (rule != null && mUseCustomGradation && tempNumber <= (mGradationSplitValue * 10)) {
                     // 计算最近的偶数刻度
                     int remainder = tempNumber % (mNumberUnit * 2);
                     if (remainder != 0) {
@@ -644,12 +881,42 @@ public class RuleView extends View {
                             }
                         }
                     }
+                } else if (rule != null) {
+                    // 非0-2x范围或不使用自定义刻度显示模式时的处理
+                    // 计算最接近的刻度值
+                    float stepMultiple = tempValue / rule.step;
+                    float roundedMultiple = Math.round(stepMultiple);
+                    float nearestScaleValue = roundedMultiple * rule.step;
+                    
+                    // 计算目标距离
+                    float targetDistance = (nearestScaleValue * 10 - mMinNumber) / mNumberUnit * gradationGap;
+                    
+                    // 获取当前滚动速度
+                    float velocity = Math.abs(mScroller.getCurrVelocity());
+                    float minVelocity = MIN_FLING_VELOCITY * VELOCITY_THRESHOLD_FACTOR;
+                    
+                    // 如果速度较低且接近终点，平滑过渡到目标刻度
+                    if (velocity < minVelocity && 
+                        Math.abs(mScroller.getFinalX() - mScroller.getCurrX()) < gradationGap * GRADATION_CHECK_RANGE) {
+                        
+                        mScroller.forceFinished(true);
+                        mScroller.startScroll(
+                            (int)mCurrentDistance,
+                            0,
+                            (int)(targetDistance - mCurrentDistance),
+                            ALIGN_ANIMATION_DURATION
+                        );
+                        invalidate();
+                        return;
+                    }
                 }
                 
                 calculateValue();
             } else {
                 scrollToGradation();
             }
+            
+            invalidate();  // 确保继续刷新
         }
     }
 
@@ -671,89 +938,74 @@ public class RuleView extends View {
         canvas.save();
         // 平移画布，处理padding
         canvas.translate(getPaddingLeft(), getPaddingTop());
-        
+
         // 计算文字基线位置：从顶部开始，先绘制文字，再绘制刻度
         float textBaseline = textSize + gradationNumberGap;
-        
-        /*
-         2 左侧刻度
-         2.1 计算左侧开始绘制的刻度
-          */
-        int startNum = ((int) mCurrentDistance - mHalfWidth) / (int) gradationGap * mNumberUnit + mMinNumber;
-        // 扩展2个单位
-        final int expendUnit = mNumberUnit << EXTEND_UNIT_SHIFT;
-        // 左侧扩展
-        startNum -= expendUnit;
-        if (startNum < mMinNumber) {
-            startNum = mMinNumber;
-        }
-        // 右侧扩展
-        int rightMaxNum = (startNum + expendUnit) + mWidthRangeNumber + expendUnit;
-        if (rightMaxNum > mMaxNumber) {
-            rightMaxNum = mMaxNumber;
-        }
-        // 当前绘制刻度对应控件左侧的位置
-        float distance = mHalfWidth - (mCurrentDistance - (startNum - mMinNumber) / mNumberUnit * gradationGap);
-        final int perUnitCount = mNumberUnit * numberPerCount;
-        
-        while (startNum <= rightMaxNum) {
-            if (startNum % perUnitCount == 0) {
-                // 长刻度：使用长刻度颜色
-                mPaint.setColor(longLineColor);
-                mPaint.setStrokeWidth(longLineWidth);
-                // 从文字下方开始绘制刻度，使用新的间距值
-                canvas.drawLine(distance, textBaseline + textGradationGap, 
-                              distance, textBaseline + textGradationGap + longGradationLen, mPaint);
 
-                // 数值
-                float fNum = startNum / 10f;
-                String text = Float.toString(fNum);
-                if (text.endsWith(".0")) {
-                    text = text.substring(0, text.length() - 2);
-                }
-                text += "x";
-                
-                final float textWidth = mTextPaint.measureText(text);
-                // 计算当前刻度与中心线的距离
-                float distanceToCenter = Math.abs(distance - mHalfWidth);
-                // 设置文本透明度，当距离小于textWidth*2.8时逐渐隐藏
-                int alpha = MAX_ALPHA;
-                float fadeDistance = textWidth * TEXT_FADE_DISTANCE_FACTOR;
-                if (distanceToCenter < fadeDistance) {
-                    // 使用平方函数使渐变更加平滑
-                    float ratio = distanceToCenter / fadeDistance;
-                    alpha = (int)(MAX_ALPHA * (ratio * ratio));
-                }
-                mTextPaint.setAlpha(alpha);
-                
-                // 在刻度上方绘制文字
-                canvas.drawText(text, distance - textWidth * .5f, textBaseline, mTextPaint);
-            } else {
-                // 短刻度：在0-2x范围内只显示偶数刻度
-                if (mUseCustomGradation && startNum <= (mGradationSplitValue * 10)) {
-                    // 在0-2x范围内，只有偶数刻度才显示
-                    if (startNum % (mNumberUnit * 2) == 0) {
-                        mPaint.setColor(shortLineColor);
-                        mPaint.setStrokeWidth(shortLineWidth);
-                        // 从文字下方开始绘制刻度，使用新的间距值
-                        canvas.drawLine(distance, textBaseline + textGradationGap, 
-                                     distance, textBaseline + textGradationGap + shortGradationLen, mPaint);
+        // 计算当前值对应的规则
+        GradationRule currentRule = getGradationRuleForValue(currentValue);
+        if (currentRule == null) {
+            canvas.restore();
+            return;
+        }
+
+        // 计算开始绘制的刻度值
+        float startValue = currentValue - (mHalfWidth / gradationGap) * gradationUnit;
+        startValue = Math.max(startValue, minValue);
+
+        // 计算结束绘制的刻度值
+        float endValue = currentValue + (mHalfWidth / gradationGap) * gradationUnit;
+        endValue = Math.min(endValue, maxValue);
+
+        // 从起始值开始绘制刻度
+        float currentDrawValue = startValue;
+        while (currentDrawValue <= endValue) {
+            // 获取当前值对应的规则
+            GradationRule rule = getGradationRuleForValue(currentDrawValue);
+            if (rule == null) {
+                currentDrawValue += gradationUnit;
+                continue;
+            }
+
+            // 计算当前刻度的x坐标
+            float distance = mHalfWidth - ((currentValue - currentDrawValue) / gradationUnit * gradationGap);
+
+            // 判断是否应该绘制这个刻度
+            // 如果当前值是规则步进值的整数倍，则绘制
+            float stepMultiple = currentDrawValue / rule.step;
+            boolean shouldDrawScale = Math.abs(Math.round(stepMultiple) - stepMultiple) < 0.001f;
+
+            if (shouldDrawScale) {
+                // 判断是否是长刻度（整数值）
+                boolean isLongScale = Math.abs(Math.round(currentDrawValue) - currentDrawValue) < 0.001f;
+
+                if (isLongScale) {
+                    // 绘制长刻度
+                    mPaint.setColor(longLineColor);
+                    mPaint.setStrokeWidth(longLineWidth);
+                    canvas.drawLine(distance, textBaseline + textGradationGap,
+                                  distance, textBaseline + textGradationGap + longGradationLen, mPaint);
+
+                    // 绘制刻度值
+                    String text = String.format("%.1fx", currentDrawValue);
+                    if (text.endsWith(".0x")) {
+                        text = text.substring(0, text.length() - 3) + "x";
                     }
+
+                    float textWidth = mTextPaint.measureText(text);
+                    canvas.drawText(text, distance - textWidth * 0.5f, textBaseline, mTextPaint);
                 } else {
-                    // 2x以上范围显示所有刻度
+                    // 绘制短刻度
                     mPaint.setColor(shortLineColor);
                     mPaint.setStrokeWidth(shortLineWidth);
-                    // 从文字下方开始绘制刻度，使用新的间距值
-                    canvas.drawLine(distance, textBaseline + textGradationGap, 
+                    canvas.drawLine(distance, textBaseline + textGradationGap,
                                   distance, textBaseline + textGradationGap + shortGradationLen, mPaint);
                 }
             }
-            startNum += mNumberUnit;
-            distance += gradationGap;
+
+            currentDrawValue += gradationUnit;
         }
-        
-        // 恢复文本画笔的透明度
-        mTextPaint.setAlpha(255);
+
         // 恢复画布状态
         canvas.restore();
     }
@@ -942,69 +1194,5 @@ public class RuleView extends View {
         }
         this.mGradationSplitValue = splitValue;
         postInvalidate();
-    }
-
-    /**
-     * 安全获取Context，避免内存泄漏
-     */
-    private Context getContextSafely() {
-        if (mContextRef != null) {
-            return mContextRef.get();
-        }
-        return null;
-    }
-    
-    @Override
-    protected void onVisibilityChanged(View changedView, int visibility) {
-        super.onVisibilityChanged(changedView, visibility);
-        if (visibility != VISIBLE && mScroller != null) {
-            // 视图不可见时停止动画
-            mScroller.abortAnimation();
-        }
-    }
-    
-    @Override
-    protected void onDetachedFromWindow() {
-        super.onDetachedFromWindow();
-        // 释放资源
-        release();
-    }
-    
-    /**
-     * 释放资源方法，防止内存泄漏
-     * 可在Activity/Fragment的onDestroy中主动调用
-     */
-    public void release() {
-        if (mIsReleased) {
-            return;
-        }
-        
-        mIsReleased = true;
-        
-        // 停止所有动画
-        if (mScroller != null) {
-            mScroller.abortAnimation();
-        }
-        
-        // 释放速度跟踪器
-        if (mVelocityTracker != null) {
-            mVelocityTracker.recycle();
-            mVelocityTracker = null;
-        }
-        
-        // 移除所有回调
-        mValueChangedListener = null;
-        
-        // 解除震动器引用
-        mVibrator = null;
-        
-        // 移除context引用
-        if (mContextRef != null) {
-            mContextRef.clear();
-            mContextRef = null;
-        }
-        
-        // 最后一次绘制
-        invalidate();
     }
 }
