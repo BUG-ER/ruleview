@@ -20,6 +20,19 @@ import kotlin.math.max
 import kotlin.math.min
 
 /**
+ * 值变化监听器接口
+ * 当控件的值发生变化时，会回调此接口方法
+ */
+interface IOnValueChangedListener {
+    /**
+     * 值变化的回调方法
+     *
+     * @param value 当前值
+     */
+    fun onValueChanged(value: Float)
+}
+
+/**
  * GradationView / RuleView
  * 刻度卷尺控件
  *
@@ -28,12 +41,14 @@ import kotlin.math.min
  * 2. 绘制刻度：
  * - 根据中间指针位置的数值，计算最小值位置与中间指针的距离
  * - 仅绘制控件宽度范围内的刻度，并在两侧各扩展一定数量刻度，保证滑动过程中的视觉连续性
- * 3. 滑动处理：
+ * 3. 区间规则：
+ * - 使用GradationGapRule定义不同值区间的刻度间距
+ * - 自动根据控件宽度计算合适的刻度间距，确保刻度均匀分布
+ * 4. 滑动处理：
  * - 移动时更新最小值与中心指针的距离，逆向计算当前刻度值
  * - 滑动停止后，自动对齐到最近的刻度（使用Scroller实现平滑过渡）
- * 4. 惯性滑动：使用VelocityTracker跟踪手指速度，实现松手后的惯性滑动
- * 5. 特殊功能：
- * - 支持自定义刻度规则，如0-2x范围只显示偶数刻度，2x以上显示所有刻度
+ * 5. 惯性滑动：使用VelocityTracker跟踪手指速度，实现松手后的惯性滑动
+ * 6. 特殊功能：
  * - 支持触觉反馈（震动）
  * - 支持点击定位
  *
@@ -132,9 +147,6 @@ class RuleView @JvmOverloads constructor(
     /** 相邻两条长刻度线之间的刻度数量  */
     private var numberPerCount = 0
 
-    /** 刻度间距离  */
-    private var gradationGap = 0f
-
     /** 刻度与文字的间距  */
     private var gradationNumberGap = 0f
 
@@ -178,12 +190,6 @@ class RuleView @JvmOverloads constructor(
      */
     private var mCurrentDistance = 0f
 
-    /**
-     * 控件宽度所占有的数值范围：mWidth / gradationGap * mNumberUnit
-     * 表示在当前控件宽度下可以显示的刻度值范围
-     */
-    private var mWidthRangeNumber = 0
-
     //=============================== 工具类实例 ===============================
     /** 普通画笔，用于绘制刻度和指针  */
     private var mPaint: Paint? = null
@@ -220,12 +226,6 @@ class RuleView @JvmOverloads constructor(
 
     /** 短刻度颜色  */
     private var shortLineColor = 0
-
-    /** 是否使用自定义刻度显示模式（0-2x只显示偶数刻度，2x以上显示所有刻度）  */
-    private var mUseCustomGradation = false
-
-    /** 刻度分割值，在此值之前使用特殊显示规则，默认为2.0x  */
-    private var mGradationSplitValue = 2.0f
 
     /** 震动管理器，用于实现触觉反馈  */
     private var mVibrator: Vibrator?
@@ -336,11 +336,6 @@ class RuleView @JvmOverloads constructor(
         currentValue = ta.getFloat(R.styleable.RuleView_gv_currentValue, DEFAULT_CURRENT_VALUE)
         gradationUnit = ta.getFloat(R.styleable.RuleView_gv_gradationUnit, DEFAULT_GRADATION_UNIT)
         numberPerCount = ta.getInt(R.styleable.RuleView_gv_numberPerCount, DEFAULT_NUMBER_PER_COUNT)
-        gradationGap = ta.getDimension(
-            R.styleable.RuleView_gv_gradationGap, dp2px(
-                DEFAULT_GRADATION_GAP_DP
-            ).toFloat()
-        )
         gradationNumberGap = ta.getDimension(
             R.styleable.RuleView_gv_gradationNumberGap, dp2px(
                 DEFAULT_GRADATION_NUMBER_GAP_DP
@@ -387,20 +382,7 @@ class RuleView @JvmOverloads constructor(
         mCurrentNumber = (currentValue * 10).toInt()
         mNumberUnit = (gradationUnit * 10).toInt()
 
-
-        // 计算当前位置距离最小值的像素距离
-        mCurrentDistance = (mCurrentNumber - mMinNumber) / mNumberUnit * gradationGap
-
-
-        // 计算整个刻度范围的像素距离
-        mNumberRangeDistance = (mMaxNumber - mMinNumber) / mNumberUnit * gradationGap
-
-
-        // 如果控件宽度已知，计算控件宽度能容纳的刻度范围
-        if (mWidth != 0) {
-            // 在onMeasure()后才能计算
-            mWidthRangeNumber = (mWidth / gradationGap * mNumberUnit).toInt()
-        }
+        recalculateDistances()
     }
 
 
@@ -414,21 +396,15 @@ class RuleView @JvmOverloads constructor(
         mWidth = calculateSize(true, widthMeasureSpec)
         mHeight = calculateSize(false, heightMeasureSpec)
 
-
         // 考虑padding，计算实际可用宽度和高度
         mWidth = mWidth - paddingLeft - paddingRight
         mHeight = mHeight - paddingTop - paddingBottom
 
-
         // 计算半宽，用于中心点定位
         mHalfWidth = mWidth shr 1
 
-
-        // 初始化时计算控件宽度可容纳的刻度范围
-        if (mWidthRangeNumber == 0) {
-            mWidthRangeNumber = (mWidth / gradationGap * mNumberUnit).toInt()
-        }
-
+        // 重新计算刻度在屏幕上对应的像素距离
+//        recalculateDistances()
 
         // 设置测量尺寸时需要加上padding
         setMeasuredDimension(
@@ -535,62 +511,43 @@ class RuleView @JvmOverloads constructor(
             }
 
             MotionEvent.ACTION_UP -> {
-                if (!isMoved) {
+                if (!isMoved && false) {
                     // 这是一个点击事件（手指没有明显移动）
                     // 计算点击位置与中心位置的偏移
                     val clickDistance = (x - paddingLeft).toFloat()
                     val centerDistance = mHalfWidth.toFloat()
                     val offset = clickDistance - centerDistance
 
-
-                    // 计算点击位置对应的目标位置
-                    var targetDistance = mCurrentDistance + offset
+                    // 根据偏移量直接计算目标值，而非通过距离
+                    // 首先获取中心位置的当前值
+                    val centerValue = mCurrentNumber
+                    
+                    // 估算每像素对应的数值增量
+                    // 使用区间规则计算点击位置对应的刻度值
+                    // 将点击点坐标转换为相对于控件中心的偏移
+                    val relativeOffset = offset
+                    
+                    // 使用当前距离加上偏移量计算新的距离
+                    val targetDistance = mCurrentDistance + offset
                     // 确保在有效范围内
-                    targetDistance = min(
+                    val clampedDistance = min(
                         max(targetDistance.toDouble(), 0.0),
                         mNumberRangeDistance.toDouble()
                     ).toFloat()
-
-
-                    // 计算目标刻度值（先计算精确位置，再四舍五入到最近刻度）
-                    val exactPosition = targetDistance / gradationGap
-                    var targetNumber = mMinNumber + Math.round(exactPosition) * mNumberUnit
-
-
-                    // 在0-2x范围内确保只能停在偶数刻度上（自定义模式）
-                    if (mUseCustomGradation && targetNumber <= (mGradationSplitValue * 10)) {
-                        // 计算最近的偶数刻度
-                        val remainder = targetNumber % (mNumberUnit * 2)
-                        if (remainder != 0) {
-                            // 计算与前后两个偶数刻度的距离
-                            val prevEven = targetNumber - remainder
-                            val nextEven = prevEven + (mNumberUnit * 2)
-
-
-                            // 使用实际点击位置来决定目标值
-                            val clickedValue = targetNumber / 10f
-                            val prevValue = prevEven / 10f
-                            val nextValue = nextEven / 10f
-
-
-                            // 根据点击位置选择更近的偶数刻度
-                            targetNumber =
-                                if (abs((clickedValue - prevValue).toDouble()) <= abs((clickedValue - nextValue).toDouble())) prevEven else nextEven
-                        }
-                    }
-
-
+                    
+                    // 使用区间规则计算距离对应的值
+                    var targetNumber = calculateNumberFromDistance(clampedDistance, true)
+                    // 对齐到最近的刻度
+                    targetNumber = alignToNearestGradation(targetNumber)
+                    
                     // 确保目标值在有效范围内
                     targetNumber = min(
                         max(targetNumber.toDouble(), mMinNumber.toDouble()),
                         mMaxNumber.toDouble()
                     ).toInt()
 
-
                     // 计算最终目标距离
-                    val targetDistance2 =
-                        (targetNumber - mMinNumber) / mNumberUnit.toFloat() * gradationGap
-
+                    val targetDistance2 = calculateDistanceFromNumber(targetNumber)
 
                     // 计算滚动距离和时间（根据距离设置动画时长，但不超过最大值）
                     val dx2 = (targetDistance2 - mCurrentDistance).toInt()
@@ -599,43 +556,112 @@ class RuleView @JvmOverloads constructor(
                         MAX_SCROLL_DURATION.toDouble()
                     ).toInt()
 
-
                     // 开始滚动动画
                     mScroller!!.startScroll(mCurrentDistance.toInt(), 0, dx2, 0, duration)
                     // 请求重绘，触发computeScroll()
                     invalidate()
                     return true
-                }
-
-
-                // 处理滑动结束（手指抬起）
-                // 计算滑动速度，用于惯性滑动
-                mVelocityTracker!!.computeCurrentVelocity(1000, MAX_FLING_VELOCITY.toFloat())
-                val xVelocity = mVelocityTracker!!.xVelocity.toInt()
-
-
-                // 如果速度超过最小阈值，启动惯性滑动
-                if (abs(xVelocity.toDouble()) >= MIN_FLING_VELOCITY) {
-                    // 注意xVelocity取反，与滑动方向一致
-                    mScroller!!.fling(
-                        mCurrentDistance.toInt(), 0, -xVelocity, 0,
-                        0, mNumberRangeDistance.toInt(), 0, 0
-                    )
-                    invalidate()
                 } else {
-                    // 速度较小，直接滚动到最近刻度
-                    scrollToGradation()
+                    // 处理滑动结束（手指抬起）
+                    // 计算滑动速度，用于惯性滑动
+                    mVelocityTracker!!.computeCurrentVelocity(1000, MAX_FLING_VELOCITY.toFloat())
+                    val xVelocity = mVelocityTracker!!.xVelocity.toInt()
+
+                    // 如果速度超过最小阈值，启动惯性滑动
+                    if (abs(xVelocity.toDouble()) >= MIN_FLING_VELOCITY) {
+                        // 注意xVelocity取反，与滑动方向一致
+                        mScroller!!.fling(
+                            mCurrentDistance.toInt(), 0, -xVelocity, 0,
+                            0, mNumberRangeDistance.toInt(), 0, 0
+                        )
+                        invalidate()
+                    } else {
+                        // 速度较小，滑动结束，对齐到最近的刻度
+                        scrollToGradation()
+                    }
+                }
+            }
+
+            MotionEvent.ACTION_CANCEL -> {
+                // 处理取消事件，与UP事件相同
+                if (!isMoved) {
+                    // 这是一个点击被取消的事件，保持当前位置不变
+                    return true
+                } else {
+                    // 处理滑动被取消（类似手指抬起）
+                    mVelocityTracker!!.computeCurrentVelocity(1000, MAX_FLING_VELOCITY.toFloat())
+                    val xVelocity = mVelocityTracker!!.xVelocity.toInt()
+                    
+                    if (abs(xVelocity.toDouble()) >= MIN_FLING_VELOCITY) {
+                        mScroller!!.fling(
+                            mCurrentDistance.toInt(), 0, -xVelocity, 0,
+                            0, mNumberRangeDistance.toInt(), 0, 0
+                        )
+                        invalidate()
+                    } else {
+                        // 速度较小，滑动结束，对齐到最近的刻度
+                        scrollToGradation()
+                    }
                 }
             }
 
             else -> {}
         }
 
-
         // 更新上次触摸位置
         mLastX = x
         mLastY = y
         return true
+    }
+
+    /**
+     * 将值对齐到最近的刻度
+     * 
+     * @param number 需要对齐的值（放大10倍的整数）
+     * @return 对齐后的值（放大10倍的整数）
+     */
+    private fun alignToNearestGradation(number: Int): Int {
+        // 计算偏移量，四舍五入到最近的刻度
+        val remainder = number % mNumberUnit
+        return if (remainder >= mNumberUnit / 2) {
+            number + (mNumberUnit - remainder)
+        } else {
+            number - remainder
+        }
+    }
+
+    /**
+     * 滑动到最近的刻度线上
+     * 当滑动结束或惯性滑动结束时调用
+     * 确保指针总是对齐到刻度线上
+     */
+    private fun scrollToGradation() {
+        // 保存旧值，用于比较是否变化
+        val oldNumber = mCurrentNumber
+        
+        // 直接计算最近的刻度值
+        val targetNumber = calculateNumberFromDistance(mCurrentDistance, true)
+        
+        // 计算对应的像素距离
+        mCurrentDistance = calculateDistanceFromNumber(targetNumber)
+        // 更新当前值
+        mCurrentNumber = targetNumber
+        // 转回浮点值
+        currentValue = mCurrentNumber / 10f
+
+        // 记录日志
+        logD(
+            "scrollToGradation: mCurrentDistance=%f, mCurrentNumber=%d, currentValue=%f",
+            mCurrentDistance, mCurrentNumber, currentValue
+        )
+
+        // 只有当值改变时才触发回调
+        if (mValueChangedListener != null && oldNumber != mCurrentNumber) {
+            mValueChangedListener!!.onValueChanged(currentValue)
+        }
+
+        // 重绘视图
+        invalidate()
     }
 
     /**
@@ -654,8 +680,8 @@ class RuleView @JvmOverloads constructor(
         val oldNumber = mCurrentNumber
 
 
-        // 根据当前距离计算刻度值（注意向下取整，确保对齐到刻度线）
-        mCurrentNumber = mMinNumber + (mCurrentDistance / gradationGap).toInt() * mNumberUnit
+        // 根据当前距离计算刻度值（注意使用特定区间规则）
+        mCurrentNumber = calculateNumberFromDistance(mCurrentDistance, false)
         // 转回浮点值
         currentValue = mCurrentNumber / 10f
 
@@ -694,83 +720,11 @@ class RuleView @JvmOverloads constructor(
             return
         }
 
-        // 在0-2x范围内只在偶数刻度处震动（自定义模式）
-        if (mUseCustomGradation && newNumber <= (mGradationSplitValue * NUMBER_MAGNIFICATION)) {
-            // 检查是否是偶数刻度，且值有变化
-            if (newNumber % (mNumberUnit * 2) == 0 && oldNumber != newNumber) {
-                mVibrator!!.vibrate(VIBRATION_DURATION)
-                mLastVibrationValue = newNumber
-            }
-        } else {
-            // 2x以上范围在每个刻度处震动
-            if (oldNumber != newNumber) {
-                mVibrator!!.vibrate(VIBRATION_DURATION)
-                mLastVibrationValue = newNumber
-            }
+        // 不再使用自定义模式，只要值变化就震动
+        if (oldNumber != newNumber) {
+            mVibrator!!.vibrate(VIBRATION_DURATION)
+            mLastVibrationValue = newNumber
         }
-    }
-
-    /**
-     * 滑动到最近的刻度线上
-     * 当滑动结束或惯性滑动结束时调用
-     * 确保指针总是对齐到刻度线上
-     */
-    private fun scrollToGradation() {
-        // 先计算当前实际位置对应的数值
-        val exactPosition = mCurrentDistance / gradationGap
-        // 四舍五入到最近刻度
-        mCurrentNumber = mMinNumber + Math.round(exactPosition) * mNumberUnit
-
-
-        // 在0-2x范围内确保只能停在偶数刻度上（自定义模式）
-        if (mUseCustomGradation && mCurrentNumber <= (mGradationSplitValue * 10)) {
-            // 计算最近的偶数刻度
-            val remainder = mCurrentNumber % (mNumberUnit * 2)
-            if (remainder != 0) {
-                // 计算与前后两个偶数刻度的距离
-                val prevEven = mCurrentNumber - remainder
-                val nextEven = prevEven + (mNumberUnit * 2)
-
-
-                // 计算实际位置与前后偶数刻度的距离
-                val currentPos = exactPosition * mNumberUnit
-                val prevPos = prevEven.toFloat()
-                val nextPos = nextEven.toFloat()
-
-
-                // 根据实际距离选择目标刻度（选择距离更近的）
-                mCurrentNumber =
-                    if ((abs((currentPos - prevPos).toDouble()) <= abs((currentPos - nextPos).toDouble()))) prevEven else nextEven
-            }
-        }
-
-
-        // 确保结果在有效范围内
-        mCurrentNumber = min(
-            max(mCurrentNumber.toDouble(), mMinNumber.toDouble()),
-            mMaxNumber.toDouble()
-        ).toInt()
-        // 计算对应的像素距离
-        mCurrentDistance = (mCurrentNumber - mMinNumber) / mNumberUnit * gradationGap
-        // 转回浮点值
-        currentValue = mCurrentNumber / 10f
-
-
-        // 记录日志
-        logD(
-            "scrollToGradation: mCurrentDistance=%f, mCurrentNumber=%d, currentValue=%f, exactPosition=%f",
-            mCurrentDistance, mCurrentNumber, currentValue, exactPosition
-        )
-
-
-        // 如果有监听器，通知值变化
-        if (mValueChangedListener != null) {
-            mValueChangedListener!!.onValueChanged(currentValue)
-        }
-
-
-        // 重绘视图
-        invalidate()
     }
 
     /**
@@ -786,67 +740,7 @@ class RuleView @JvmOverloads constructor(
                 // 更新当前距离
                 mCurrentDistance = mScroller!!.currX.toFloat()
 
-
-                // 计算当前值
-                val exactPosition = mCurrentDistance / gradationGap
-                val tempNumber = mMinNumber + (exactPosition).toInt() * mNumberUnit
-
-
-                // 在0-2x范围内且启用自定义模式时，需要调整滑动终点
-                if (mUseCustomGradation && tempNumber <= (mGradationSplitValue * 10)) {
-                    // 计算最近的偶数刻度
-                    val remainder = tempNumber % (mNumberUnit * 2)
-                    if (remainder != 0) {
-                        // 计算与前后两个偶数刻度的距离
-                        val prevEven = tempNumber - remainder
-                        val nextEven = prevEven + (mNumberUnit * 2)
-
-
-                        // 计算实际位置与前后偶数刻度的距离
-                        val currentPos = exactPosition * mNumberUnit
-                        val prevPos = prevEven.toFloat()
-                        val nextPos = nextEven.toFloat()
-
-
-                        // 获取当前滚动速度
-                        val velocity =
-                            abs(mScroller!!.currVelocity.toDouble()).toFloat()
-                        val minVelocity = MIN_FLING_VELOCITY * VELOCITY_THRESHOLD_FACTOR
-
-
-                        // 如果速度较低，开始考虑对齐到偶数刻度
-                        if (velocity < minVelocity) {
-                            // 根据实际距离选择目标刻度
-                            val targetNumber =
-                                if ((abs((currentPos - prevPos).toDouble()) <= abs((currentPos - nextPos).toDouble()))) prevEven else nextEven
-
-
-                            // 计算新的目标距离
-                            val targetDistance =
-                                (targetNumber - mMinNumber) / mNumberUnit * gradationGap
-
-
-                            // 如果已经接近终点，平滑过渡到目标刻度
-                            if (abs((mScroller!!.finalX - mScroller!!.currX).toDouble()) < gradationGap * GRADATION_CHECK_RANGE) {
-                                // 强制结束当前滚动
-                                mScroller!!.forceFinished(true)
-                                // 启动新的短动画，平滑过渡到目标刻度
-                                mScroller!!.startScroll(
-                                    mCurrentDistance.toInt(),
-                                    0,
-                                    (targetDistance - mCurrentDistance).toInt(),
-                                    0,
-                                    ALIGN_ANIMATION_DURATION
-                                )
-                                invalidate()
-                                return
-                            }
-                        }
-                    }
-                }
-
-
-                // 计算并更新当前值
+                // 直接根据当前距离计算并更新当前值
                 calculateValue()
             } else {
                 // 滚动结束，对齐到最近的刻度
@@ -882,51 +776,51 @@ class RuleView @JvmOverloads constructor(
         // 平移画布，处理padding
         canvas.translate(paddingLeft.toFloat(), paddingTop.toFloat())
 
-
         // 计算文字基线位置：从顶部开始，先绘制文字，再绘制刻度
         val textBaseline = textSize + gradationNumberGap
 
-
-        /*
-         计算左侧开始绘制的刻度
-         从当前位置向左偏移半个控件宽度
-         */
-        var startNum =
-            (mCurrentDistance.toInt() - mHalfWidth) / gradationGap.toInt() * mNumberUnit + mMinNumber
-
-
-        // 扩展2个单位，确保滑动时两侧有足够的刻度
-        val expendUnit = mNumberUnit shl EXTEND_UNIT_SHIFT
-        // 左侧扩展
-        startNum -= expendUnit
-        // 确保不小于最小值
-        if (startNum < mMinNumber) {
-            startNum = mMinNumber
+        // 使用规则绘制刻度
+        if (mGradationGapRules.isNotEmpty()) {
+            drawGradationWithRules(canvas, textBaseline)
+            canvas.restore()
+            return
         }
+    }
 
+    /**
+     * 使用不同区间规则绘制刻度
+     *
+     * @param canvas 画布
+     * @param textBaseline 文本基线位置
+     */
+    private fun drawGradationWithRules(canvas: Canvas, textBaseline: Float) {
+        // 计算当前中心位置对应的值
+        val centerValue = calculateNumberFromDistance(mCurrentDistance, false)
 
-        // 右侧扩展，计算最大可见刻度
-        var rightMaxNum = (startNum + expendUnit) + mWidthRangeNumber + expendUnit
-        // 确保不超过最大值
-        if (rightMaxNum > mMaxNumber) {
-            rightMaxNum = mMaxNumber
-        }
+        // 计算左右可见区域对应的值范围
+        val leftValue = calculateNumberFromDistance(max(0f, mCurrentDistance - mHalfWidth), false)
+        val rightValue = calculateNumberFromDistance(min(mNumberRangeDistance, mCurrentDistance + mHalfWidth), false)
 
+        // 扩展绘制范围，确保滑动时两侧有足够的刻度
+//        val expendUnit = mNumberUnit shl EXTEND_UNIT_SHIFT
+        val expendUnit = 0
 
-        // 当前绘制刻度对应控件左侧的位置
-        var distance =
-            mHalfWidth - (mCurrentDistance - (startNum - mMinNumber) / mNumberUnit * gradationGap)
-        // 计算长刻度间隔（如每10个刻度一个长刻度）
-        val perUnitCount = mNumberUnit * numberPerCount
-
-
-        // 逐个绘制可见范围内的刻度
-        while (startNum <= rightMaxNum) {
+        var startNum = max(mMinNumber, leftValue - expendUnit)
+        var endNum = min(mMaxNumber, rightValue + expendUnit)
+        
+        // 依次绘制每个可见的刻度
+        var currentNum = startNum
+        while (currentNum <= endNum) {
+            // 计算当前刻度对应的x坐标
+            val distance = mHalfWidth + (calculateDistanceFromNumber(currentNum) - mCurrentDistance)
+            
             // 判断是否是长刻度（整数倍刻度）
-            if (startNum % perUnitCount == 0) {
+            val perUnitCount = mNumberUnit * numberPerCount
+            if (currentNum % perUnitCount == 0) {
                 // 长刻度：使用长刻度颜色和宽度
                 mPaint!!.color = longLineColor
                 mPaint!!.strokeWidth = longLineWidth
+                
                 // 从文字下方开始绘制刻度
                 canvas.drawLine(
                     distance, textBaseline + textGradationGap,
@@ -934,7 +828,7 @@ class RuleView @JvmOverloads constructor(
                 )
 
                 // 绘制刻度值文本
-                val fNum = startNum / 10f
+                val fNum = currentNum / 10f
                 var text = fNum.toString()
                 // 去掉小数点后的.0
                 if (text.endsWith(".0")) {
@@ -943,14 +837,11 @@ class RuleView @JvmOverloads constructor(
                 // 添加单位标识
                 text += "x"
 
-
                 // 计算文本宽度
                 val textWidth = mTextPaint!!.measureText(text)
 
-
                 // 计算当前刻度与中心线的距离，用于文本透明度渐变
-                val distanceToCenter =
-                    abs((distance - mHalfWidth).toDouble()).toFloat()
+                val distanceToCenter = abs((distance - mHalfWidth).toDouble()).toFloat()
                 // 设置文本透明度，当距离小于一定值时逐渐隐藏，避免文本重叠
                 var alpha = MAX_ALPHA
                 val fadeDistance = textWidth * TEXT_FADE_DISTANCE_FACTOR
@@ -961,45 +852,25 @@ class RuleView @JvmOverloads constructor(
                 }
                 mTextPaint!!.alpha = alpha
 
-
                 // 在刻度上方居中绘制文字
                 canvas.drawText(text, distance - textWidth * .5f, textBaseline, mTextPaint)
             } else {
-                // 短刻度：根据不同规则处理
-                if (mUseCustomGradation && startNum <= (mGradationSplitValue * 10)) {
-                    // 在0-2x范围内，只有偶数刻度才显示
-                    if (startNum % (mNumberUnit * 2) == 0) {
-                        mPaint!!.color = shortLineColor
-                        mPaint!!.strokeWidth = shortLineWidth
-                        // 从文字下方开始绘制刻度
-                        canvas.drawLine(
-                            distance, textBaseline + textGradationGap,
-                            distance, textBaseline + textGradationGap + shortGradationLen, mPaint
-                        )
-                    }
-                } else {
-                    // 2x以上范围显示所有刻度
-                    mPaint!!.color = shortLineColor
-                    mPaint!!.strokeWidth = shortLineWidth
-                    // 从文字下方开始绘制刻度
-                    canvas.drawLine(
-                        distance, textBaseline + textGradationGap,
-                        distance, textBaseline + textGradationGap + shortGradationLen, mPaint
-                    )
-                }
+                // 短刻度：不再根据自定义规则处理，始终显示所有刻度
+                mPaint!!.color = shortLineColor
+                mPaint!!.strokeWidth = shortLineWidth
+                // 从文字下方开始绘制刻度
+                canvas.drawLine(
+                    distance, textBaseline + textGradationGap,
+                    distance, textBaseline + textGradationGap + shortGradationLen, mPaint
+                )
             }
 
-
             // 移动到下一个刻度
-            startNum += mNumberUnit
-            distance += gradationGap
+            currentNum += mNumberUnit
         }
-
-
+        
         // 恢复文本画笔的透明度
         mTextPaint!!.alpha = 255
-        // 恢复画布状态
-        canvas.restore()
     }
 
     /**
@@ -1093,29 +964,26 @@ class RuleView @JvmOverloads constructor(
             )
         }
 
-
         // 强制结束当前滚动动画
         if (!mScroller!!.isFinished) {
             mScroller!!.forceFinished(true)
         }
 
-
         // 更新当前值
         this.currentValue = currentValue
         mCurrentNumber = (this.currentValue * 10).toInt()
 
-
-        // 计算新位置与当前位置的距离
-        val newDistance = (mCurrentNumber - mMinNumber) / mNumberUnit * gradationGap
+        // 使用区间规则计算新位置
+        val newDistance = calculateDistanceFromNumber(mCurrentNumber)
         val dx = (newDistance - mCurrentDistance).toInt()
 
-
         // 根据距离计算动画时长，最大2000ms
+        // 使用比例计算，使动画时长与距离成正比
+        val proportion = newDistance / mNumberRangeDistance
         val duration = min(
-            (abs(dx.toDouble()) * MAX_VALUE_CHANGE_DURATION / mNumberRangeDistance.toInt()).toDouble(),
+            (abs(dx.toDouble()) * MAX_VALUE_CHANGE_DURATION / mNumberRangeDistance).toDouble(),
             MAX_VALUE_CHANGE_DURATION.toDouble()
         ).toInt()
-
 
         // 启动滚动动画
         mScroller!!.startScroll(mCurrentDistance.toInt(), 0, dx, 0, duration)
@@ -1124,174 +992,190 @@ class RuleView @JvmOverloads constructor(
     }
 
     /**
-     * 获取当前值
+     * 设置不同区间的刻度间隔
+     * 允许在不同的值范围内使用不同的像素间距
      *
-     * @return 当前值
+     * @param gapRules 刻度间隔规则列表，每个规则定义一个区间和对应的像素间距
+     * @param initialValue 可选参数，设置初始刻度值。如果不指定，保持当前值
      */
-    fun getCurrentValue(): Float {
-        return this.currentValue
-    }
-
-    /**
-     * 重新配置控件参数
-     * 设置值范围、当前值、最小单位等
-     *
-     * @param minValue  最小值
-     * @param maxValue  最大值
-     * @param curValue  当前值
-     * @param unit      最小单位所代表的值
-     * @param perCount  相邻两条长刻度线之间被分成的隔数量
-     * @throws IllegalArgumentException 如果参数无效
-     */
-    fun setValue(minValue: Float, maxValue: Float, curValue: Float, unit: Float, perCount: Int) {
-        // 检查参数有效性
-        require(!(minValue > maxValue || curValue < minValue || curValue > maxValue)) {
-            String.format(
-                "无效的参数值，请检查: " +
-                        "minValue=%f, maxValue=%f, curValue=%s", minValue, maxValue, curValue
-            )
-        }
-
-
-        // 强制结束当前滚动动画
-        if (!mScroller!!.isFinished) {
-            mScroller!!.forceFinished(true)
-        }
-
-
-        // 更新参数值
-        this.minValue = minValue
-        this.maxValue = maxValue
-        this.currentValue = curValue
-        this.gradationUnit = unit
-        this.numberPerCount = perCount
-
-
-        // 转换值并重新计算内部参数
-        convertValue2Number()
-
-
-        // 通知值变化
-        if (mValueChangedListener != null) {
-            mValueChangedListener!!.onValueChanged(currentValue)
-        }
-
-
-        // 重绘视图
-        postInvalidate()
-    }
-
-    /**
-     * 设置当前值变化监听器
-     *
-     * @param listener 监听器实例
-     */
-    fun setOnValueChangedListener(listener: IOnValueChangedListener?) {
-        this.mValueChangedListener = listener
-    }
-
-    /**
-     * 根据控件宽度自动计算刻度间距
-     * 使刻度均匀分布在控件宽度内
-     *
-     * @param minValue  最小值
-     * @param maxValue  最大值
-     * @param curValue  当前值
-     * @param unit      最小单位所代表的值
-     * @param perCount  相邻两条长刻度线之间被分成的隔数量
-     * @throws IllegalArgumentException 如果参数无效
-     */
-    fun setAutoGap(minValue: Float, maxValue: Float, curValue: Float, unit: Float, perCount: Int) {
-        // 检查参数有效性
-        require(!(minValue > maxValue || curValue < minValue || curValue > maxValue)) {
-            String.format(
-                "无效的参数值，请检查: " +
-                        "minValue=%f, maxValue=%f, curValue=%s", minValue, maxValue, curValue
-            )
-        }
-
-
-        // 强制结束当前滚动动画
-        if (!mScroller!!.isFinished) {
-            mScroller!!.forceFinished(true)
-        }
-
-
-        // 如果控件尚未测量，先使用常规值设置
-        if (mWidth <= 0) {
-            setValue(minValue, maxValue, curValue, unit, perCount)
+    @JvmOverloads
+    fun setGradationGapRules(gapRules: List<GradationGapRule>, initialValue: Float? = null) {
+        // 确保规则列表不为空
+        if (gapRules.isEmpty()) {
             return
         }
 
-
-        // 计算刻度线总数
-        val totalScaleCount = ((maxValue - minValue) / unit).toInt() + 1
-
-
-        // 计算刻度间距（以像素为单位）
-        val calculatedGapPx = mWidth.toFloat() / (totalScaleCount - 1)
-
-
-        // 使用计算出的像素值作为刻度间距
-        this.gradationGap = calculatedGapPx
-
-
-        // 更新其他参数
-        this.minValue = minValue
-        this.maxValue = maxValue
-        this.currentValue = curValue
-        this.gradationUnit = unit
-        this.numberPerCount = perCount
-
-
-        // 记录日志便于调试
-        logD(
-            "setAutoGap: minValue=%f, maxValue=%f, totalScaleCount=%d, mWidth=%d, calculatedGapPx=%f",
-            minValue, maxValue, totalScaleCount, mWidth, calculatedGapPx
-        )
-
-
+        // 验证规则列表覆盖了整个值范围
+        val sortedRules = gapRules.sortedBy { it.startValue }
+        
+        // 更新视图的最小值和最大值
+        this.minValue = sortedRules.first().startValue
+        this.maxValue = sortedRules.last().endValue
+        
+        // 如果指定了初始值，使用它；否则确保当前值在新的范围内
+        if (initialValue != null) {
+            currentValue = min(max(initialValue, minValue), maxValue)
+        } else if (currentValue < minValue) {
+            currentValue = minValue
+        } else if (currentValue > maxValue) {
+            currentValue = maxValue
+        }
+        
+        // 检查第一个规则的起始值是否等于最小值
+        require(abs(sortedRules.first().startValue - minValue) < FLOAT_PRECISION) {
+            "第一个规则的起始值(${sortedRules.first().startValue})必须等于最小值($minValue)"
+        }
+        
+        // 检查最后一个规则的结束值是否等于最大值
+        require(abs(sortedRules.last().endValue - maxValue) < FLOAT_PRECISION) {
+            "最后一个规则的结束值(${sortedRules.last().endValue})必须等于最大值($maxValue)"
+        }
+        
+        // 检查规则是否连续且不重叠
+        for (i in 0 until sortedRules.size - 1) {
+            require(abs(sortedRules[i].endValue - sortedRules[i + 1].startValue) < FLOAT_PRECISION) {
+                "规则必须连续且不重叠：规则${i}的结束值(${sortedRules[i].endValue})必须等于规则${i+1}的起始值(${sortedRules[i + 1].startValue})"
+            }
+        }
+        
+        // 保存规则列表
+        mGradationGapRules = sortedRules.toMutableList()
+        
         // 转换值并重新计算内部参数
         convertValue2Number()
-
 
         // 通知值变化
         if (mValueChangedListener != null) {
             mValueChangedListener!!.onValueChanged(currentValue)
         }
-
-
-        // 重绘视图
+        
         postInvalidate()
     }
 
     /**
-     * 设置刻度显示模式
-     * 开启自定义模式后，0-2x范围内只显示偶数刻度，2-4x显示所有刻度
-     *
-     * @param useCustomGradation 是否使用自定义刻度显示模式
+     * 重新计算基于规则的距离值
      */
-    fun setCustomGradationMode(useCustomGradation: Boolean) {
-        this.mUseCustomGradation = useCustomGradation
-        postInvalidate()
-    }
+    private fun recalculateDistances() {
+        if (mGradationGapRules == null || mGradationGapRules.isEmpty()) {
 
-    /**
-     * 设置刻度分割值
-     * 在此值之前的范围使用特殊显示规则（如只显示偶数刻度）
-     *
-     * @param splitValue 分割值，分割值之前使用特殊规则
-     * @throws IllegalArgumentException 如果分割值超出范围
-     */
-    fun setGradationSplitValue(splitValue: Float) {
-        require(!(splitValue < minValue || splitValue > maxValue)) {
-            String.format(
-                "分割值 %f 超出有效范围: [%f, %f]",
-                splitValue, minValue, maxValue
-            )
+            return
         }
-        this.mGradationSplitValue = splitValue
-        postInvalidate()
+
+        // 重新计算总距离
+        mNumberRangeDistance = 0f
+        for (rule in mGradationGapRules) {
+            val startNum = (rule.startValue * 10).toInt()
+            val endNum = (rule.endValue * 10).toInt()
+            val rangeNumber = endNum - startNum
+            mNumberRangeDistance += rangeNumber / mNumberUnit.toFloat() * rule.gapPx
+        }
+        
+        // 重新计算当前距离
+        mCurrentDistance = 0f
+        var currentNum = mMinNumber
+        for (rule in mGradationGapRules) {
+            val startNum = (rule.startValue * 10).toInt()
+            val endNum = (rule.endValue * 10).toInt()
+            
+            if (mCurrentNumber <= endNum) {
+                // 当前值在这个规则范围内
+                mCurrentDistance += (mCurrentNumber - startNum) / mNumberUnit.toFloat() * rule.gapPx
+                break
+            } else {
+                // 累加这个规则范围的全部距离
+                mCurrentDistance += (endNum - startNum) / mNumberUnit.toFloat() * rule.gapPx
+                currentNum = endNum
+            }
+        }
+    }
+    
+    /**
+     * 根据当前距离计算对应的值，并返回刻度值
+     * 考虑不同区间的刻度间隔
+     *
+     * @param distance 当前距离
+     * @param roundMode 取整模式: true表示四舍五入到最近刻度, false表示向下取整
+     * @return 对应的刻度值（放大10倍的整数）
+     */
+    private fun calculateNumberFromDistance(distance: Float, roundMode: Boolean = true): Int {
+        if (mGradationGapRules.isEmpty()) {
+            return 0
+        }
+        
+        var remainingDistance = distance
+        var currentNum = mMinNumber
+        
+        for (rule in mGradationGapRules) {
+            val startNum = (rule.startValue * 10).toInt()
+            val endNum = (rule.endValue * 10).toInt()
+            val rangeNumber = endNum - startNum
+            val ruleDistance = rangeNumber / mNumberUnit.toFloat() * rule.gapPx
+            
+            if (remainingDistance <= ruleDistance) {
+                // 在当前规则范围内
+                // 计算在当前规则下的精确刻度位置
+                val exactScale = remainingDistance / rule.gapPx
+                val scaleNumber = if (roundMode) {
+                    Math.round(exactScale)  // 四舍五入到最近的刻度
+                } else {
+                    Math.floor(exactScale.toDouble()).toInt()  // 向下取整到最近的刻度
+                }
+                val exactNumber = startNum + (scaleNumber * mNumberUnit)
+                
+                // 确保结果在当前规则范围内
+                return min(max(exactNumber, startNum), endNum)
+            } else {
+                // 超过当前规则范围
+                remainingDistance -= ruleDistance
+                currentNum = endNum
+            }
+        }
+        
+        // 如果超出范围，返回最大值
+        return mMaxNumber
+    }
+
+    /**
+     * 根据值计算对应的距离
+     * 考虑不同区间的刻度间隔
+     *
+     * @param number 值（放大10倍的整数）
+     * @return 对应的距离
+     */
+    private fun calculateDistanceFromNumber(number: Int): Float {
+        if (mGradationGapRules.isEmpty()) {
+            // 如果没有规则，使用默认计算方式
+            // 计算默认间距
+            val totalScaleCount = ((maxValue - minValue) / gradationUnit).toInt() + 1
+            val defaultGapPx = if (totalScaleCount > 1 && mWidth > 0) {
+                mWidth.toFloat() / (totalScaleCount - 1)
+            } else {
+                1f // 防止除以零
+            }
+            
+            return (number - mMinNumber) / mNumberUnit.toFloat() * defaultGapPx
+        }
+        
+        var distance = 0f
+        var currentNum = mMinNumber
+        
+        for (rule in mGradationGapRules) {
+            val startNum = (rule.startValue * 10).toInt()
+            val endNum = (rule.endValue * 10).toInt()
+            
+            if (number <= endNum) {
+                // 在当前规则范围内
+                distance += (number - startNum) / mNumberUnit.toFloat() * rule.gapPx
+                return distance
+            } else {
+                // 累加这个规则范围的全部距离
+                distance += (endNum - startNum) / mNumberUnit.toFloat() * rule.gapPx
+                currentNum = endNum
+            }
+        }
+        
+        // 如果超出范围，返回最大值对应的距离
+        return mNumberRangeDistance
     }
 
     private val contextSafely: Context?
@@ -1401,9 +1285,6 @@ class RuleView @JvmOverloads constructor(
         /** 默认指示器线长度，单位dp  */
         private const val DEFAULT_INDICATOR_LINE_LEN_DP = 35f
 
-        /** 默认刻度间距，单位dp  */
-        private const val DEFAULT_GRADATION_GAP_DP = 10f
-
         /** 默认刻度与数字间距，单位dp  */
         private const val DEFAULT_GRADATION_NUMBER_GAP_DP = 8f
 
@@ -1433,9 +1314,6 @@ class RuleView @JvmOverloads constructor(
         /** 默认每个主刻度包含的子刻度数量  */
         private const val DEFAULT_NUMBER_PER_COUNT = 10
 
-        /** 默认刻度分割值，在此值之前使用特殊显示规则  */
-        private const val DEFAULT_SPLIT_VALUE = 2.0f
-
         //=============================== 震动相关 ===============================
         /** 震动持续时间，单位毫秒  */
         private const val VIBRATION_DURATION = 20L
@@ -1463,12 +1341,34 @@ class RuleView @JvmOverloads constructor(
         /** 最大透明度值  */
         private const val MAX_ALPHA = 255
 
-        //=============================== 数值转换相关 ===============================
-        /** 数值放大倍数，用于将浮点值转换为整数以提高精度  */
-        private const val NUMBER_MAGNIFICATION = 10
-
         //=============================== 扩展单位相关 ===============================
         /** 扩展单位位移量，用于计算左右两侧额外绘制的刻度数量  */
         private const val EXTEND_UNIT_SHIFT = 1
+
+        /** 浮点数比较精度  */
+        private val FLOAT_PRECISION = 0.0001f
+    }
+
+    /**
+     * 刻度间隔规则类
+     * 定义一个值区间及其对应的像素间隔
+     */
+    data class GradationGapRule(
+        val startValue: Float,  // 区间起始值
+        val endValue: Float,    // 区间结束值
+        val gapPx: Float        // 像素间隔
+    )
+    
+    // 添加到类的成员变量
+    /** 不同区间的刻度间隔规则  */
+    private var mGradationGapRules: MutableList<GradationGapRule> = mutableListOf()
+
+    /**
+     * 设置当前值变化监听器
+     *
+     * @param listener 监听器实例
+     */
+    fun setOnValueChangedListener(listener: IOnValueChangedListener?) {
+        this.mValueChangedListener = listener
     }
 }

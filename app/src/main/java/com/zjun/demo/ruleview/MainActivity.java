@@ -4,14 +4,18 @@ import android.os.Bundle;
 import android.support.annotation.IdRes;
 import android.support.v7.app.AppCompatActivity;
 import android.view.View;
-import android.view.ViewTreeObserver;
 import android.widget.LinearLayout;
 import android.widget.TextView;
+
+import com.zjun.widget.IOnValueChangedListener;
 import com.zjun.widget.RuleView;
+
+import java.util.ArrayList;
+import java.util.List;
 
 public class MainActivity extends AppCompatActivity {
 
-    private TextView tvValue;
+    private TextView tvGvValue;
     private RuleView gvRule;
     private TextView tvRuleIndicator;
     private LinearLayout llRuleSettings;
@@ -21,38 +25,24 @@ public class MainActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
-        tvValue = findViewById(R.id.tv_value);
+        tvGvValue = findViewById(R.id.tv_value);
         gvRule = findViewById(R.id.gv_1);
         tvRuleIndicator = findViewById(R.id.tv_rule_indicator);
         llRuleSettings = findViewById(R.id.ll_rule_settings);
         
-        // 先使用常规方法初始化刻度尺（此时尚未获得控件宽度）
-        gvRule.setValue(0, 10, 2, 0.1f, 10);
+        // 使用新的设置不同区间刻度间隔的方法
+        setRule();
 
-        // 等待布局完成后获取实际宽度，再计算刻度间距
-//        gvRule.getViewTreeObserver().addOnGlobalLayoutListener(new ViewTreeObserver.OnGlobalLayoutListener() {
-//            @Override
-//            public void onGlobalLayout() {
-//                // 只需执行一次
-//                gvRule.getViewTreeObserver().removeOnGlobalLayoutListener(this);
-//
-//                // 使用自动计算刻度间距的方法设置刻度尺
-//                gvRule.setAutoGap(0, 4, 2, 0.1f, 10);
-//            }
-//        });
-        
-        tvValue.setText(Float.toString(gvRule.getCurrentValue()));
-        gvRule.setOnValueChangedListener(new RuleView.OnValueChangedListener() {
+        gvRule.setOnValueChangedListener(new IOnValueChangedListener() {
             @Override
             public void onValueChanged(float value) {
-                tvValue.setText(String.format("%.1fx", value));
+                String str = String.format("%.1f", value);
+                if (str.endsWith(".0")) {
+                    str = str.substring(0, str.length() - 2);
+                }
+                tvGvValue.setText(str + "x");
             }
         });
-
-        // 启用自定义刻度显示模式
-        gvRule.setCustomGradationMode(true);
-        // 设置分割值（在此值之前显示偶数刻度，之后显示所有刻度）
-        gvRule.setGradationSplitValue(2.0f);
     }
 
     public void onClick(View view) {
@@ -79,5 +69,27 @@ public class MainActivity extends AppCompatActivity {
     private void toggleValue() {
         i++;
         gvRule.setCurrentValue((i % 2 == 0) ? 1.4f: 2.5f);
+    }
+
+    private void setRule() {
+        // 设置初始值和规则
+        // gvRule.setValue(0, 4, 2, 0.1f, 10);
+        
+        // 创建刻度间隔规则列表
+        List<RuleView.GradationGapRule> rules = new ArrayList<>();
+        
+        // 规则1: 0到1.0之间刻度间隔为40px
+        rules.add(new RuleView.GradationGapRule(0.1f, 1.0f, 80.0f));
+        
+        // 规则2: 1.0到4.0之间刻度间隔为20px
+        rules.add(new RuleView.GradationGapRule(1.0f, 10.0f, 20.0f));
+        
+        // 设置刻度间隔规则
+        gvRule.setGradationGapRules(rules, 0.0f);
+
+        
+        // 以下自定义刻度显示模式的设置已移除
+        // gvRule.setCustomGradationMode(true);
+        // gvRule.setGradationSplitValue(2.0f);
     }
 }

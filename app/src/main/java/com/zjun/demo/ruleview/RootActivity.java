@@ -27,12 +27,12 @@ public class RootActivity extends AppCompatActivity {
             }
         });
 
-        btnMainActivity1.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                Intent intent = new Intent(RootActivity.this, MainActivity1.class);
-                startActivity(intent);
-            }
-        });
+//        btnMainActivity1.setOnClickListener(new View.OnClickListener() {
+//            @Override
+//            public void onClick(View v) {
+//                Intent intent = new Intent(RootActivity.this, MainActivity1.class);
+//                startActivity(intent);
+//            }
+//        });
     }
 } 
