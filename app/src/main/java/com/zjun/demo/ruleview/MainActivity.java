@@ -7,8 +7,11 @@ import android.view.View;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
+import com.zjun.widget.IOnScrollStopListener;
 import com.zjun.widget.IOnValueChangedListener;
 import com.zjun.widget.RuleView;
+
+import org.jetbrains.annotations.NotNull;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -43,6 +46,12 @@ public class MainActivity extends AppCompatActivity {
                 tvGvValue.setText(str + "x");
             }
         });
+        gvRule.setOnScrollStopListener(new IOnScrollStopListener() {
+            @Override
+            public void onScrollStop(float value, @NotNull String label) {
+
+            }
+        });
     }
 
     public void onClick(View view) {
@@ -68,7 +77,7 @@ public class MainActivity extends AppCompatActivity {
     int i = 0;
     private void toggleValue() {
         i++;
-        gvRule.setCurrentValue((i % 2 == 0) ? 1.4f: 2.5f);
+        gvRule.setCurrentValue((i % 2 == 0) ? 0.4f: 0.8f);
     }
 
     private void setRule() {
@@ -79,13 +88,13 @@ public class MainActivity extends AppCompatActivity {
         List<RuleView.GradationGapRule> rules = new ArrayList<>();
         
         // 规则1: 0到1.0之间刻度间隔为40px
-        rules.add(new RuleView.GradationGapRule(0.1f, 1.0f, 80.0f));
+        rules.add(new RuleView.GradationGapRule(0.1f, 1.0f, 100.0f));
         
         // 规则2: 1.0到4.0之间刻度间隔为20px
         rules.add(new RuleView.GradationGapRule(1.0f, 10.0f, 20.0f));
         
         // 设置刻度间隔规则
-        gvRule.setGradationGapRules(rules, 0.0f);
+        gvRule.setGradationGapRules(rules, 5.0f);
 
         
         // 以下自定义刻度显示模式的设置已移除

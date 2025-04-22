@@ -4,7 +4,6 @@ import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
-import android.os.Vibrator
 import android.text.TextPaint
 import android.util.AttributeSet
 import android.util.Log
@@ -30,6 +29,20 @@ interface IOnValueChangedListener {
      * @param value 当前值
      */
     fun onValueChanged(value: Float)
+}
+
+/**
+ * 滑动停止监听器接口
+ * 当滑动停止时，会回调此接口方法
+ */
+interface IOnScrollStopListener {
+    /**
+     * 滑动停止的回调方法
+     *
+     * @param value 当前值
+     * @param label 当前刻度标签文本
+     */
+    fun onScrollStop(value: Float, label: String)
 }
 
 /**
@@ -221,26 +234,23 @@ class RuleView @JvmOverloads constructor(
     /** 值变化监听器  */
     private var mValueChangedListener: IOnValueChangedListener? = null
 
+    /** 滑动停止监听器 */
+    private var mScrollStopListener: IOnScrollStopListener? = null
+
     /** 长刻度颜色  */
     private var longLineColor = 0
 
     /** 短刻度颜色  */
     private var shortLineColor = 0
 
-    /** 震动管理器，用于实现触觉反馈  */
-    private var mVibrator: Vibrator?
-
-    /** 上次震动时的刻度值，避免重复震动  */
-    private var mLastVibrationValue: Int
-
-    @Deprecated("请使用 {@link IOnValueChangedListener} 代替")
-    interface OnValueChangedListener : IOnValueChangedListener
-
     /** 是否已释放资源标志，防止内存泄漏  */
     private var mIsReleased = false
 
     /** 使用弱引用持有Context，避免内存泄漏  */
     private var mContextRef: WeakReference<Context>?
+
+    @Deprecated("请使用 {@link IOnValueChangedListener} 代替")
+    interface OnValueChangedListener : IOnValueChangedListener
 
     /**
      * 构造函数，三参数
@@ -261,7 +271,6 @@ class RuleView @JvmOverloads constructor(
         // 使用弱引用持有context，避免内存泄漏
         mContextRef = WeakReference(context)
 
-
         // 初始化自定义属性
         initAttrs(context, attrs)
 
@@ -270,10 +279,6 @@ class RuleView @JvmOverloads constructor(
         TOUCH_SLOP = viewConfiguration.scaledTouchSlop
         MIN_FLING_VELOCITY = viewConfiguration.scaledMinimumFlingVelocity
         MAX_FLING_VELOCITY = viewConfiguration.scaledMaximumFlingVelocity
-
-        // 初始化震动管理器
-        mVibrator = context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
-        mLastVibrationValue = mCurrentNumber
 
         // 转换值和初始化画笔等资源
         convertValue2Number()
@@ -288,66 +293,66 @@ class RuleView @JvmOverloads constructor(
      * @param attrs 属性集
      */
     private fun initAttrs(context: Context, attrs: AttributeSet?) {
-        val ta = context.obtainStyledAttributes(attrs, R.styleable.RuleView)
+        val typedArray = context.obtainStyledAttributes(attrs, R.styleable.RuleView)
         // 读取各项属性值，如果XML中未指定则使用默认值
-        bgColor = ta.getColor(
+        bgColor = typedArray.getColor(
             R.styleable.RuleView_zjun_bgColor, Color.parseColor(
                 DEFAULT_BG_COLOR
             )
         )
-        gradationColor = ta.getColor(R.styleable.RuleView_zjun_gradationColor, Color.LTGRAY)
-        shortLineWidth = ta.getDimension(
+        gradationColor = typedArray.getColor(R.styleable.RuleView_zjun_gradationColor, Color.LTGRAY)
+        shortLineWidth = typedArray.getDimension(
             R.styleable.RuleView_gv_shortLineWidth, dp2px(
                 DEFAULT_SHORT_LINE_WIDTH_DP
             ).toFloat()
         )
-        shortGradationLen = ta.getDimension(
+        shortGradationLen = typedArray.getDimension(
             R.styleable.RuleView_gv_shortGradationLen, dp2px(
                 DEFAULT_SHORT_GRADATION_LEN_DP
             ).toFloat()
         )
         longGradationLen =
-            ta.getDimension(R.styleable.RuleView_gv_longGradationLen, shortGradationLen * 2)
-        longLineWidth = ta.getDimension(R.styleable.RuleView_gv_longLineWidth, shortLineWidth * 2)
-        longLineColor = ta.getColor(R.styleable.RuleView_gv_longLineColor, gradationColor)
-        shortLineColor = ta.getColor(R.styleable.RuleView_gv_shortLineColor, gradationColor)
-        textColor = ta.getColor(R.styleable.RuleView_zjun_textColor, Color.BLACK)
-        textSize = ta.getDimension(
+            typedArray.getDimension(R.styleable.RuleView_gv_longGradationLen, shortGradationLen * 2)
+        longLineWidth = typedArray.getDimension(R.styleable.RuleView_gv_longLineWidth, shortLineWidth * 2)
+        longLineColor = typedArray.getColor(R.styleable.RuleView_gv_longLineColor, gradationColor)
+        shortLineColor = typedArray.getColor(R.styleable.RuleView_gv_shortLineColor, gradationColor)
+        textColor = typedArray.getColor(R.styleable.RuleView_zjun_textColor, Color.BLACK)
+        textSize = typedArray.getDimension(
             R.styleable.RuleView_zjun_textSize,
             sp2px(DEFAULT_TEXT_SIZE_SP).toFloat()
         )
-        indicatorLineColor = ta.getColor(
+        indicatorLineColor = typedArray.getColor(
             R.styleable.RuleView_zjun_indicatorLineColor, Color.parseColor(
                 DEFAULT_INDICATOR_COLOR
             )
         )
-        indicatorLineWidth = ta.getDimension(
+        indicatorLineWidth = typedArray.getDimension(
             R.styleable.RuleView_zjun_indicatorLineWidth, dp2px(
                 DEFAULT_INDICATOR_LINE_WIDTH_DP
             ).toFloat()
         )
-        indicatorLineLen = ta.getDimension(
+        indicatorLineLen = typedArray.getDimension(
             R.styleable.RuleView_gv_indicatorLineLen, dp2px(
                 DEFAULT_INDICATOR_LINE_LEN_DP
             ).toFloat()
         )
-        minValue = ta.getFloat(R.styleable.RuleView_gv_minValue, DEFAULT_MIN_VALUE)
-        maxValue = ta.getFloat(R.styleable.RuleView_gv_maxValue, DEFAULT_MAX_VALUE)
-        currentValue = ta.getFloat(R.styleable.RuleView_gv_currentValue, DEFAULT_CURRENT_VALUE)
-        gradationUnit = ta.getFloat(R.styleable.RuleView_gv_gradationUnit, DEFAULT_GRADATION_UNIT)
-        numberPerCount = ta.getInt(R.styleable.RuleView_gv_numberPerCount, DEFAULT_NUMBER_PER_COUNT)
-        gradationNumberGap = ta.getDimension(
+        minValue = typedArray.getFloat(R.styleable.RuleView_gv_minValue, DEFAULT_MIN_VALUE)
+        maxValue = typedArray.getFloat(R.styleable.RuleView_gv_maxValue, DEFAULT_MAX_VALUE)
+        currentValue = typedArray.getFloat(R.styleable.RuleView_gv_currentValue, DEFAULT_CURRENT_VALUE)
+        gradationUnit = typedArray.getFloat(R.styleable.RuleView_gv_gradationUnit, DEFAULT_GRADATION_UNIT)
+        numberPerCount = typedArray.getInt(R.styleable.RuleView_gv_numberPerCount, DEFAULT_NUMBER_PER_COUNT)
+        gradationNumberGap = typedArray.getDimension(
             R.styleable.RuleView_gv_gradationNumberGap, dp2px(
                 DEFAULT_GRADATION_NUMBER_GAP_DP
             ).toFloat()
         )
-        textGradationGap = ta.getDimension(
+        textGradationGap = typedArray.getDimension(
             R.styleable.RuleView_gv_textGradationGap, dp2px(
                 DEFAULT_TEXT_GRADATION_GAP_DP
             ).toFloat()
         )
         // 回收TypedArray，释放资源
-        ta.recycle()
+        typedArray.recycle()
     }
 
     /**
@@ -360,12 +365,10 @@ class RuleView @JvmOverloads constructor(
         // 创建普通画笔并设置抗锯齿
         mPaint = Paint(Paint.ANTI_ALIAS_FLAG)
         mPaint!!.strokeWidth = shortLineWidth
-
         // 创建文字画笔并设置抗锯齿、文字大小和颜色
         mTextPaint = TextPaint(Paint.ANTI_ALIAS_FLAG)
         mTextPaint!!.textSize = textSize
         mTextPaint!!.color = textColor
-
         // 创建滚动器用于实现平滑滚动效果
         mScroller = Scroller(context)
     }
@@ -459,18 +462,12 @@ class RuleView @JvmOverloads constructor(
         if (mIsReleased) {
             return false
         }
-
-
         // 获取事件类型和坐标
         val action = event.action
         val x = event.x.toInt()
         val y = event.y.toInt()
-
-
         // 记录日志
         logD("onTouchEvent: action=%d", action)
-
-
         // 初始化或获取速度跟踪器
         if (mVelocityTracker == null) {
             mVelocityTracker = VelocityTracker.obtain()
@@ -487,11 +484,9 @@ class RuleView @JvmOverloads constructor(
                 // 重置移动标志
                 isMoved = false
             }
-
             MotionEvent.ACTION_MOVE -> {
                 // 计算X方向移动距离
                 val dx = x - mLastX
-
                 // 判断是否已经开始滑动（区分点击和滑动）
                 if (!isMoved) {
                     // 计算Y方向移动距离
@@ -503,85 +498,29 @@ class RuleView @JvmOverloads constructor(
                     // 设置已开始滑动标志
                     isMoved = true
                 }
-
                 // 更新当前距离（注意dx取反，手指右滑，刻度左移）
                 mCurrentDistance += -dx.toFloat()
                 // 计算新的当前值
                 calculateValue()
             }
-
             MotionEvent.ACTION_UP -> {
-                if (!isMoved && false) {
-                    // 这是一个点击事件（手指没有明显移动）
-                    // 计算点击位置与中心位置的偏移
-                    val clickDistance = (x - paddingLeft).toFloat()
-                    val centerDistance = mHalfWidth.toFloat()
-                    val offset = clickDistance - centerDistance
-
-                    // 根据偏移量直接计算目标值，而非通过距离
-                    // 首先获取中心位置的当前值
-                    val centerValue = mCurrentNumber
-                    
-                    // 估算每像素对应的数值增量
-                    // 使用区间规则计算点击位置对应的刻度值
-                    // 将点击点坐标转换为相对于控件中心的偏移
-                    val relativeOffset = offset
-                    
-                    // 使用当前距离加上偏移量计算新的距离
-                    val targetDistance = mCurrentDistance + offset
-                    // 确保在有效范围内
-                    val clampedDistance = min(
-                        max(targetDistance.toDouble(), 0.0),
-                        mNumberRangeDistance.toDouble()
-                    ).toFloat()
-                    
-                    // 使用区间规则计算距离对应的值
-                    var targetNumber = calculateNumberFromDistance(clampedDistance, true)
-                    // 对齐到最近的刻度
-                    targetNumber = alignToNearestGradation(targetNumber)
-                    
-                    // 确保目标值在有效范围内
-                    targetNumber = min(
-                        max(targetNumber.toDouble(), mMinNumber.toDouble()),
-                        mMaxNumber.toDouble()
-                    ).toInt()
-
-                    // 计算最终目标距离
-                    val targetDistance2 = calculateDistanceFromNumber(targetNumber)
-
-                    // 计算滚动距离和时间（根据距离设置动画时长，但不超过最大值）
-                    val dx2 = (targetDistance2 - mCurrentDistance).toInt()
-                    val duration = min(
-                        (abs(dx2.toDouble()) * 2).toDouble(),
-                        MAX_SCROLL_DURATION.toDouble()
-                    ).toInt()
-
-                    // 开始滚动动画
-                    mScroller!!.startScroll(mCurrentDistance.toInt(), 0, dx2, 0, duration)
-                    // 请求重绘，触发computeScroll()
+                // 处理滑动结束（手指抬起）
+                // 计算滑动速度，用于惯性滑动
+                mVelocityTracker!!.computeCurrentVelocity(1000, MAX_FLING_VELOCITY.toFloat())
+                val xVelocity = mVelocityTracker!!.xVelocity.toInt()
+                // 如果速度超过最小阈值，启动惯性滑动
+                if (abs(xVelocity.toDouble()) >= MIN_FLING_VELOCITY) {
+                    // 注意xVelocity取反，与滑动方向一致
+                    mScroller!!.fling(
+                        mCurrentDistance.toInt(), 0, -xVelocity, 0,
+                        0, mNumberRangeDistance.toInt(), 0, 0
+                    )
                     invalidate()
-                    return true
                 } else {
-                    // 处理滑动结束（手指抬起）
-                    // 计算滑动速度，用于惯性滑动
-                    mVelocityTracker!!.computeCurrentVelocity(1000, MAX_FLING_VELOCITY.toFloat())
-                    val xVelocity = mVelocityTracker!!.xVelocity.toInt()
-
-                    // 如果速度超过最小阈值，启动惯性滑动
-                    if (abs(xVelocity.toDouble()) >= MIN_FLING_VELOCITY) {
-                        // 注意xVelocity取反，与滑动方向一致
-                        mScroller!!.fling(
-                            mCurrentDistance.toInt(), 0, -xVelocity, 0,
-                            0, mNumberRangeDistance.toInt(), 0, 0
-                        )
-                        invalidate()
-                    } else {
-                        // 速度较小，滑动结束，对齐到最近的刻度
-                        scrollToGradation()
-                    }
+                    // 速度较小，滑动结束，对齐到最近的刻度
+                    scrollToGradation()
                 }
             }
-
             MotionEvent.ACTION_CANCEL -> {
                 // 处理取消事件，与UP事件相同
                 if (!isMoved) {
@@ -591,7 +530,6 @@ class RuleView @JvmOverloads constructor(
                     // 处理滑动被取消（类似手指抬起）
                     mVelocityTracker!!.computeCurrentVelocity(1000, MAX_FLING_VELOCITY.toFloat())
                     val xVelocity = mVelocityTracker!!.xVelocity.toInt()
-                    
                     if (abs(xVelocity.toDouble()) >= MIN_FLING_VELOCITY) {
                         mScroller!!.fling(
                             mCurrentDistance.toInt(), 0, -xVelocity, 0,
@@ -604,10 +542,8 @@ class RuleView @JvmOverloads constructor(
                     }
                 }
             }
-
             else -> {}
         }
-
         // 更新上次触摸位置
         mLastX = x
         mLastY = y
@@ -660,6 +596,9 @@ class RuleView @JvmOverloads constructor(
             mValueChangedListener!!.onValueChanged(currentValue)
         }
 
+        // 触发滑动停止回调
+        mScrollStopListener?.onScrollStop(currentValue, formatValueToLabel(currentValue))
+
         // 重绘视图
         invalidate()
     }
@@ -674,57 +613,23 @@ class RuleView @JvmOverloads constructor(
             max(mCurrentDistance.toDouble(), 0.0),
             mNumberRangeDistance.toDouble()
         ).toFloat()
-
-
         // 保存旧值，用于比较是否变化
         val oldNumber = mCurrentNumber
-
-
         // 根据当前距离计算刻度值（注意使用特定区间规则）
         mCurrentNumber = calculateNumberFromDistance(mCurrentDistance, false)
         // 转回浮点值
         currentValue = mCurrentNumber / 10f
-
-
-        // 检查是否需要震动反馈
-        checkVibration(oldNumber, mCurrentNumber)
-
-
         // 记录日志
         logD(
             "calculateValue: mCurrentDistance=%f, mCurrentNumber=%d, currentValue=%f",
             mCurrentDistance, mCurrentNumber, currentValue
         )
-
-
         // 如果有监听器，通知值变化
-        if (mValueChangedListener != null) {
+        if (mValueChangedListener != null && oldNumber != mCurrentNumber) {
             mValueChangedListener!!.onValueChanged(currentValue)
         }
-
-
         // 重绘视图
         invalidate()
-    }
-
-    /**
-     * 检查是否需要震动
-     * 在滑过刻度线时提供触觉反馈
-     *
-     * @param oldNumber 上一个刻度值
-     * @param newNumber 当前刻度值
-     */
-    private fun checkVibration(oldNumber: Int, newNumber: Int) {
-        // 确保震动器可用且还未释放资源
-        if (mVibrator == null || !mVibrator!!.hasVibrator() || mIsReleased) {
-            return
-        }
-
-        // 不再使用自定义模式，只要值变化就震动
-        if (oldNumber != newNumber) {
-            mVibrator!!.vibrate(VIBRATION_DURATION)
-            mLastVibrationValue = newNumber
-        }
     }
 
     /**
@@ -987,6 +892,11 @@ class RuleView @JvmOverloads constructor(
 
         // 启动滚动动画
         mScroller!!.startScroll(mCurrentDistance.toInt(), 0, dx, 0, duration)
+        
+        // 立即触发一次值变化回调，不等待动画完成
+        mValueChangedListener?.onValueChanged(currentValue)
+        mScrollStopListener?.onScrollStop(currentValue, formatValueToLabel(currentValue))
+        
         // 请求重绘，触发动画
         postInvalidate()
     }
@@ -1223,40 +1133,25 @@ class RuleView @JvmOverloads constructor(
         if (mIsReleased) {
             return
         }
-
-
         // 设置释放标志
         mIsReleased = true
-
-
         // 停止所有动画
         if (mScroller != null) {
             mScroller!!.abortAnimation()
         }
-
-
         // 释放速度跟踪器
         if (mVelocityTracker != null) {
             mVelocityTracker!!.recycle()
             mVelocityTracker = null
         }
-
-
         // 移除所有回调
         mValueChangedListener = null
-
-
-        // 解除震动器引用
-        mVibrator = null
-
-
+        mScrollStopListener = null
         // 移除context引用
         if (mContextRef != null) {
             mContextRef!!.clear()
             mContextRef = null
         }
-
-
         // 最后一次绘制
         invalidate()
     }
@@ -1268,29 +1163,22 @@ class RuleView @JvmOverloads constructor(
         //=============================== 默认颜色值 ===============================
         /** 默认背景颜色：浅绿色  */
         private const val DEFAULT_BG_COLOR = "#f5f8f5"
-
         /** 默认指示器颜色：绿色  */
         private const val DEFAULT_INDICATOR_COLOR = "#48b975"
 
         //=============================== 默认尺寸（dp）===============================
         /** 默认短刻度线宽度，单位dp  */
         private const val DEFAULT_SHORT_LINE_WIDTH_DP = 1f
-
         /** 默认短刻度线长度，单位dp  */
         private const val DEFAULT_SHORT_GRADATION_LEN_DP = 16f
-
         /** 默认指示器线宽度，单位dp  */
         private const val DEFAULT_INDICATOR_LINE_WIDTH_DP = 3f
-
         /** 默认指示器线长度，单位dp  */
         private const val DEFAULT_INDICATOR_LINE_LEN_DP = 35f
-
         /** 默认刻度与数字间距，单位dp  */
         private const val DEFAULT_GRADATION_NUMBER_GAP_DP = 8f
-
         /** 默认文字与刻度间距，单位dp  */
         private const val DEFAULT_TEXT_GRADATION_GAP_DP = 5f
-
         /** 默认内容高度，单位dp  */
         private const val DEFAULT_CONTENT_HEIGHT_DP = 90
 
@@ -1301,50 +1189,36 @@ class RuleView @JvmOverloads constructor(
         //=============================== 默认数值参数 ===============================
         /** 默认最小值  */
         private const val DEFAULT_MIN_VALUE = 0f
-
         /** 默认最大值  */
         private const val DEFAULT_MAX_VALUE = 100f
-
         /** 默认当前值  */
         private const val DEFAULT_CURRENT_VALUE = 50f
-
         /** 默认刻度单位值  */
         private const val DEFAULT_GRADATION_UNIT = 0.1f
-
         /** 默认每个主刻度包含的子刻度数量  */
         private const val DEFAULT_NUMBER_PER_COUNT = 10
-
-        //=============================== 震动相关 ===============================
-        /** 震动持续时间，单位毫秒  */
-        private const val VIBRATION_DURATION = 20L
 
         //=============================== 动画相关 ===============================
         /** 最大滚动动画时间，单位毫秒  */
         private const val MAX_SCROLL_DURATION = 800
-
         /** 值变化最大动画时间，单位毫秒  */
         private const val MAX_VALUE_CHANGE_DURATION = 2000
-
         /** 对齐动画时间，单位毫秒  */
         private const val ALIGN_ANIMATION_DURATION = 150
-
         /** 速度阈值系数，用于判断是否需要进行刻度对齐  */
         private const val VELOCITY_THRESHOLD_FACTOR = 0.8f
-
         /** 刻度检查范围，用于确定何时触发对齐动画  */
         private const val GRADATION_CHECK_RANGE = 3
 
         //=============================== 文本渐变相关 ===============================
         /** 文本渐变距离系数，控制文本在接近中心线时的渐变效果  */
         private const val TEXT_FADE_DISTANCE_FACTOR = 4.0f
-
         /** 最大透明度值  */
         private const val MAX_ALPHA = 255
 
         //=============================== 扩展单位相关 ===============================
         /** 扩展单位位移量，用于计算左右两侧额外绘制的刻度数量  */
         private const val EXTEND_UNIT_SHIFT = 1
-
         /** 浮点数比较精度  */
         private val FLOAT_PRECISION = 0.0001f
     }
@@ -1370,5 +1244,29 @@ class RuleView @JvmOverloads constructor(
      */
     fun setOnValueChangedListener(listener: IOnValueChangedListener?) {
         this.mValueChangedListener = listener
+    }
+
+    /**
+     * 设置滑动停止监听器
+     *
+     * @param listener 监听器实例
+     */
+    fun setOnScrollStopListener(listener: IOnScrollStopListener?) {
+        this.mScrollStopListener = listener
+    }
+
+    /**
+     * 格式化值为标签文本
+     * @param value 需要格式化的值
+     * @return 格式化后的标签文本
+     */
+    private fun formatValueToLabel(value: Float): String {
+        var label = value.toString()
+        // 去掉小数点后的.0
+        if (label.endsWith(".0")) {
+            label = label.substring(0, label.length - 2)
+        }
+        // 添加单位标识
+        return "${label}x"
     }
 }
