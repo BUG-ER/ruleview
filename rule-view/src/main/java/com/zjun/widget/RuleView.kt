@@ -19,6 +19,15 @@ import kotlin.math.max
 import kotlin.math.min
 
 /**
+ * 特殊长刻度规则类
+ * 定义需要显示为长刻度的特殊值
+ */
+data class SpecialGradationRule(
+    val value: Float,  // 特殊刻度值
+    val showText: Boolean = true  // 是否显示文本，默认显示
+)
+
+/**
  * 值变化监听器接口
  * 当控件的值发生变化时，会回调此接口方法
  */
@@ -248,6 +257,9 @@ class RuleView @JvmOverloads constructor(
 
     /** 使用弱引用持有Context，避免内存泄漏  */
     private var mContextRef: WeakReference<Context>?
+
+    /** 特殊长刻度规则列表  */
+    private var mSpecialGradations: MutableList<SpecialGradationRule> = mutableListOf()
 
     @Deprecated("请使用 {@link IOnValueChangedListener} 代替")
     interface OnValueChangedListener : IOnValueChangedListener
@@ -707,9 +719,7 @@ class RuleView @JvmOverloads constructor(
         val rightValue = calculateNumberFromDistance(min(mNumberRangeDistance, mCurrentDistance + mHalfWidth), false)
 
         // 扩展绘制范围，确保滑动时两侧有足够的刻度
-//        val expendUnit = mNumberUnit shl EXTEND_UNIT_SHIFT
-        val expendUnit = 0
-
+        val expendUnit = mNumberUnit shl EXTEND_UNIT_SHIFT
         var startNum = max(mMinNumber, leftValue - expendUnit)
         var endNum = min(mMaxNumber, rightValue + expendUnit)
         
@@ -719,9 +729,13 @@ class RuleView @JvmOverloads constructor(
             // 计算当前刻度对应的x坐标
             val distance = mHalfWidth + (calculateDistanceFromNumber(currentNum) - mCurrentDistance)
             
-            // 判断是否是长刻度（整数倍刻度）
+            // 判断是否是长刻度（整数倍刻度）或特殊刻度
             val perUnitCount = mNumberUnit * numberPerCount
-            if (currentNum % perUnitCount == 0) {
+            val currentValue = currentNum / 10f
+            val isSpecialGradation = mSpecialGradations.any { it.value == currentValue }
+            val isLongGradation = currentNum % perUnitCount == 0 || isSpecialGradation
+
+            if (isLongGradation) {
                 // 长刻度：使用长刻度颜色和宽度
                 mPaint!!.color = longLineColor
                 mPaint!!.strokeWidth = longLineWidth
@@ -732,38 +746,42 @@ class RuleView @JvmOverloads constructor(
                     distance, textBaseline + textGradationGap + longGradationLen, mPaint
                 )
 
-                // 绘制刻度值文本
-                val fNum = currentNum / 10f
-                var text = fNum.toString()
-                // 去掉小数点后的.0
-                if (text.endsWith(".0")) {
-                    text = text.substring(0, text.length - 2)
+                // 判断是否需要绘制文本
+                val shouldShowText = currentNum % perUnitCount == 0 || 
+                    mSpecialGradations.find { it.value == currentValue }?.showText == true
+
+                if (shouldShowText) {
+                    // 绘制刻度值文本
+                    val fNum = currentValue
+                    var text = fNum.toString()
+                    // 去掉小数点后的.0
+                    if (text.endsWith(".0")) {
+                        text = text.substring(0, text.length - 2)
+                    }
+                    // 添加单位标识
+                    text += "x"
+
+                    // 计算文本宽度
+                    val textWidth = mTextPaint!!.measureText(text)
+
+                    // 计算当前刻度与中心线的距离，用于文本透明度渐变
+                    val distanceToCenter = abs((distance - mHalfWidth).toDouble()).toFloat()
+                    // 设置文本透明度
+                    var alpha = MAX_ALPHA
+                    val fadeDistance = textWidth * TEXT_FADE_DISTANCE_FACTOR
+                    if (distanceToCenter < fadeDistance) {
+                        val ratio = distanceToCenter / fadeDistance
+                        alpha = (MAX_ALPHA * (ratio * ratio)).toInt()
+                    }
+                    mTextPaint!!.alpha = alpha
+
+                    // 在刻度上方居中绘制文字
+                    canvas.drawText(text, distance - textWidth * .5f, textBaseline, mTextPaint)
                 }
-                // 添加单位标识
-                text += "x"
-
-                // 计算文本宽度
-                val textWidth = mTextPaint!!.measureText(text)
-
-                // 计算当前刻度与中心线的距离，用于文本透明度渐变
-                val distanceToCenter = abs((distance - mHalfWidth).toDouble()).toFloat()
-                // 设置文本透明度，当距离小于一定值时逐渐隐藏，避免文本重叠
-                var alpha = MAX_ALPHA
-                val fadeDistance = textWidth * TEXT_FADE_DISTANCE_FACTOR
-                if (distanceToCenter < fadeDistance) {
-                    // 使用平方函数使渐变更加平滑
-                    val ratio = distanceToCenter / fadeDistance
-                    alpha = (MAX_ALPHA * (ratio * ratio)).toInt()
-                }
-                mTextPaint!!.alpha = alpha
-
-                // 在刻度上方居中绘制文字
-                canvas.drawText(text, distance - textWidth * .5f, textBaseline, mTextPaint)
             } else {
-                // 短刻度：不再根据自定义规则处理，始终显示所有刻度
+                // 短刻度
                 mPaint!!.color = shortLineColor
                 mPaint!!.strokeWidth = shortLineWidth
-                // 从文字下方开始绘制刻度
                 canvas.drawLine(
                     distance, textBaseline + textGradationGap,
                     distance, textBaseline + textGradationGap + shortGradationLen, mPaint
@@ -1268,5 +1286,16 @@ class RuleView @JvmOverloads constructor(
         }
         // 添加单位标识
         return "${label}x"
+    }
+
+    /**
+     * 设置特殊长刻度
+     * 这些刻度会像主刻度一样显示为长刻度，并可选择是否显示文本
+     *
+     * @param specialValues 特殊刻度值列表
+     */
+    fun setSpecialGradations(specialValues: List<SpecialGradationRule>) {
+        mSpecialGradations = specialValues.toMutableList()
+        invalidate()
     }
 }

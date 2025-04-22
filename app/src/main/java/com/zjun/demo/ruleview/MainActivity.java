@@ -10,10 +10,12 @@ import android.widget.TextView;
 import com.zjun.widget.IOnScrollStopListener;
 import com.zjun.widget.IOnValueChangedListener;
 import com.zjun.widget.RuleView;
+import com.zjun.widget.SpecialGradationRule;
 
 import org.jetbrains.annotations.NotNull;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 public class MainActivity extends AppCompatActivity {
@@ -83,7 +85,12 @@ public class MainActivity extends AppCompatActivity {
     private void setRule() {
         // 设置初始值和规则
         // gvRule.setValue(0, 4, 2, 0.1f, 10);
-        
+        List<SpecialGradationRule> specialGradationRules = Arrays.asList(
+                new SpecialGradationRule(0.1f, true),  // 0.1x 将显示为长刻度并显示文本
+                new SpecialGradationRule(0.5f, true)   // 0.5x 将显示为长刻度并显示文本
+        );
+        gvRule.setSpecialGradations(specialGradationRules);
+
         // 创建刻度间隔规则列表
         List<RuleView.GradationGapRule> rules = new ArrayList<>();
         
@@ -95,6 +102,7 @@ public class MainActivity extends AppCompatActivity {
         
         // 设置刻度间隔规则
         gvRule.setGradationGapRules(rules, 5.0f);
+
 
         
         // 以下自定义刻度显示模式的设置已移除
