@@ -7,7 +7,6 @@ import android.view.View;
 import android.view.ViewTreeObserver;
 import android.widget.LinearLayout;
 import android.widget.TextView;
-
 import com.zjun.widget.RuleView;
 
 public class MainActivity extends AppCompatActivity {
@@ -28,19 +27,19 @@ public class MainActivity extends AppCompatActivity {
         llRuleSettings = findViewById(R.id.ll_rule_settings);
         
         // 先使用常规方法初始化刻度尺（此时尚未获得控件宽度）
-//        gvRule.setValue(0, 4, 2, 0.1f, 10);
+        gvRule.setValue(0, 10, 2, 0.1f, 10);
 
         // 等待布局完成后获取实际宽度，再计算刻度间距
-        gvRule.getViewTreeObserver().addOnGlobalLayoutListener(new ViewTreeObserver.OnGlobalLayoutListener() {
-            @Override
-            public void onGlobalLayout() {
-                // 只需执行一次
-                gvRule.getViewTreeObserver().removeOnGlobalLayoutListener(this);
-
-                // 使用自动计算刻度间距的方法设置刻度尺
-                gvRule.setAutoGap(0, 4, 2, 0.1f, 10);
-            }
-        });
+//        gvRule.getViewTreeObserver().addOnGlobalLayoutListener(new ViewTreeObserver.OnGlobalLayoutListener() {
+//            @Override
+//            public void onGlobalLayout() {
+//                // 只需执行一次
+//                gvRule.getViewTreeObserver().removeOnGlobalLayoutListener(this);
+//
+//                // 使用自动计算刻度间距的方法设置刻度尺
+//                gvRule.setAutoGap(0, 4, 2, 0.1f, 10);
+//            }
+//        });
         
         tvValue.setText(Float.toString(gvRule.getCurrentValue()));
         gvRule.setOnValueChangedListener(new RuleView.OnValueChangedListener() {
@@ -65,7 +64,7 @@ public class MainActivity extends AppCompatActivity {
                 gvRule.setCurrentValue(2);
                 break;
             case R.id.btn_change:
-//                toggleValue();
+                toggleValue();
                 break;
             default: break;
         }
@@ -76,13 +75,9 @@ public class MainActivity extends AppCompatActivity {
         llSettings.setVisibility(llSettings.getVisibility() == View.VISIBLE ? View.INVISIBLE : View.VISIBLE);
     }
 
+    int i = 0;
     private void toggleValue() {
-        if (gvRule.getMinValue() == 0) {
-            // 切换到1-3范围，使用自动计算刻度间距
-            gvRule.setAutoGap(1, 3, 2, 0.1f, 10);
-        } else {
-            // 切换回0-4范围，使用自动计算刻度间距
-            gvRule.setAutoGap(0, 4, 2, 0.1f, 10);
-        }
+        i++;
+        gvRule.setCurrentValue((i % 2 == 0) ? 1.4f: 2.5f);
     }
 }
