@@ -8,4 +8,30 @@
         <item name="colorAccent">@color/colorAccent</item>
     </style>
 
+    <style name="CustomRuleViewStyle">
+        <!-- 基本刻度值设置 -->
+        <item name="gv_minValue">0.0</item>
+        <item name="gv_maxValue">1.0</item>
+        <item name="gv_currentValue">0.5</item>
+        <item name="gv_gradationUnit">0.1</item>
+        <item name="gv_numberPerCount">10</item>
+        
+        <!-- 颜色设置 -->
+        <item name="zjun_bgColor">#f5f8f5</item>
+        <item name="zjun_gradationColor">#48b975</item>
+        <item name="zjun_textColor">#333333</item>
+        <item name="zjun_indicatorLineColor">#48b975</item>
+        
+        <!-- 尺寸设置 -->
+        <item name="gv_shortLineWidth">1dp</item>
+        <item name="gv_longLineWidth">2dp</item>
+        <item name="gv_shortGradationLen">16dp</item>
+        <item name="gv_longGradationLen">32dp</item>
+        <item name="zjun_textSize">14sp</item>
+        <item name="zjun_indicatorLineWidth">2dp</item>
+        <item name="gv_indicatorLineLen">35dp</item>
+        <item name="gv_gradationNumberGap">8dp</item>
+        <item name="gv_textGradationGap">5dp</item>
+    </style>
+
 </resources>

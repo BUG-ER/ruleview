@@ -493,6 +493,8 @@ class RuleView @JvmOverloads constructor(
                 mScroller!!.forceFinished(true)
                 // 记录按下位置
                 mDownX = x
+                // 记录按下时间
+                mTouchDownTime = System.currentTimeMillis()
                 // 重置移动标志
                 isMoved = false
             }
@@ -516,6 +518,17 @@ class RuleView @JvmOverloads constructor(
                 calculateValue()
             }
             MotionEvent.ACTION_UP -> {
+                if (!isMoved) {
+                    // 计算触摸持续时间
+                    val touchDuration = System.currentTimeMillis() - mTouchDownTime
+                    // 只有在触摸时间小于阈值时才处理点击事件
+                    return if (touchDuration <= MAX_CLICK_DURATION) {
+                        handleClickEvent(x)
+                    } else {
+                        true
+                    }
+                }
+
                 // 处理滑动结束（手指抬起）
                 // 计算滑动速度，用于惯性滑动
                 mVelocityTracker!!.computeCurrentVelocity(1000, MAX_FLING_VELOCITY.toFloat())
@@ -559,6 +572,36 @@ class RuleView @JvmOverloads constructor(
         // 更新上次触摸位置
         mLastX = x
         mLastY = y
+        return true
+    }
+
+    /**
+     * 处理点击事件
+     * 计算点击位置对应的值并滚动到该位置
+     *
+     * @param x 点击的x坐标
+     * @return true表示事件已处理
+     */
+    private fun handleClickEvent(x: Int): Boolean {
+        // 计算点击位置对应的距离，需要减去 paddingLeft 才是相对于内容区域的位置
+        val clickX = x - paddingLeft
+        val clickDistance = (clickX - mHalfWidth) + mCurrentDistance
+        // 限定点击范围在有效区间内
+        val validDistance = min(max(clickDistance, 0f), mNumberRangeDistance)
+
+        logD("点击事件 - 原始坐标: x=%s, clickX=%s, mHalfWidth=%d, paddingLeft=%d",
+            x.toString(), clickX.toString(), mHalfWidth, paddingLeft)
+        logD("点击事件 - 距离计算: clickDistance=%s, validDistance=%s, mCurrentDistance=%s",
+            clickDistance.toString(), validDistance.toString(), mCurrentDistance.toString())
+
+        // 计算目标值并滚动
+        val targetNumber = calculateNumberFromDistance(validDistance, true)
+
+        logD("点击事件 - 目标计算: targetNumber=%d (值=%s)",
+            targetNumber, (targetNumber / 10f).toString())
+
+        // 直接使用 setCurrentValue，它会处理平滑滚动和回调
+        setCurrentValue(targetNumber / 10f)
         return true
     }
 
@@ -1239,6 +1282,9 @@ class RuleView @JvmOverloads constructor(
         private const val EXTEND_UNIT_SHIFT = 1
         /** 浮点数比较精度  */
         private val FLOAT_PRECISION = 0.0001f
+
+        /** 有效点击的最大时长（毫秒） */
+        private const val MAX_CLICK_DURATION = 100L
     }
 
     /**
@@ -1298,4 +1344,7 @@ class RuleView @JvmOverloads constructor(
         mSpecialGradations = specialValues.toMutableList()
         invalidate()
     }
+
+    /** 记录按下时的时间戳 */
+    private var mTouchDownTime: Long = 0
 }
