@@ -13,6 +13,9 @@ import android.view.VelocityTracker
 import android.view.View
 import android.view.ViewConfiguration
 import android.widget.Scroller
+import android.os.Vibrator
+import android.os.VibrationEffect
+import android.os.Build
 import java.lang.ref.WeakReference
 import kotlin.math.abs
 import kotlin.math.max
@@ -383,6 +386,10 @@ class RuleView @JvmOverloads constructor(
         mTextPaint!!.color = textColor
         // 创建滚动器用于实现平滑滚动效果
         mScroller = Scroller(context)
+
+        // 降低吸附效果参数
+        mSnapRange = shortGradationLen * 0.6f  // 从1.0f降低到0.6f，减小吸附触发范围
+        mSnapEscapeDistance = shortGradationLen * 1.5f  // 从3.0f降低到1.5f，减小脱离所需距离
     }
 
     /**
@@ -497,6 +504,16 @@ class RuleView @JvmOverloads constructor(
                 mTouchDownTime = System.currentTimeMillis()
                 // 重置移动标志
                 isMoved = false
+                // 重置上次经过的刻度值
+                mLastMoveGradationValue = Float.MIN_VALUE
+                // 重置当前吸附位置
+                mCurrentSnapPosition = -1f
+                // 记录手指原始位置
+                mRawTouchPosition = x.toFloat()
+                // 重置上次移动距离
+                mLastDx = 0f
+                // 保存当前值作为初始值
+                mLastCalculatedValue = currentValue
             }
             MotionEvent.ACTION_MOVE -> {
                 // 计算X方向移动距离
@@ -511,9 +528,102 @@ class RuleView @JvmOverloads constructor(
                     }
                     // 设置已开始滑动标志
                     isMoved = true
+                    // 记录初始原始位置
+                    mRawTouchPosition = x.toFloat()
                 }
-                // 更新当前距离（注意dx取反，手指右滑，刻度左移）
-                mCurrentDistance += -dx.toFloat()
+                
+                // 更新手指原始位置
+                mRawTouchPosition = x.toFloat()
+                
+                // 保存当前dx，用于判断移动方向
+                mLastDx = dx.toFloat()
+                
+                // 处理吸附效果：如果当前正在吸附状态
+                if (mCurrentSnapPosition >= 0) {
+                    // 如果当前有吸附位置，计算手指移动距离
+                    val escapeDelta = abs(mRawTouchPosition - mDownX)
+                    
+                    // 只有移动距离超过脱离阈值，才能脱离吸附
+                    if (escapeDelta < mSnapEscapeDistance) {
+                        // 降低吸附强度：添加比例滑动而不是完全阻止滑动
+                        // 计算一个0-1的系数，用于部分应用dx
+                        val breakFactor = escapeDelta / mSnapEscapeDistance
+                        // 随着距离增加，允许更多的滑动
+                        val allowedDx = dx * breakFactor * 0.7f  // 0.7系数让过渡更平滑
+                        
+                        // 部分应用滑动效果
+                        mCurrentDistance -= allowedDx
+                        
+                        // 计算当前值
+                        calculateValue()
+                        return true
+                    } else {
+                        // 已经脱离吸附
+                        mCurrentSnapPosition = -1f
+                        // 更新起始点，避免突然跳跃
+                        mDownX = x
+                    }
+                }
+                
+                // 计算手指移动后的目标距离
+                val targetDistance = mCurrentDistance - dx.toFloat()
+                
+                // 判断是否需要吸附效果
+                val currentValue = calculateNumberFromDistance(targetDistance, false) / 10f
+                
+                // 检查是否滑动经过了有文字的刻度（而不是靠近）
+                // 1. 检查当前值和上次值是否在刻度两侧
+                // 2. 确保不是已经吸附过的刻度
+                if (shouldShowTextAtValue(currentValue) || hasValueCrossedGradation(mLastCalculatedValue, currentValue)) {
+                    
+                    // 只有在滑过刻度时才考虑吸附，而不是靠近
+                    if (hasValueCrossedGradation(mLastCalculatedValue, currentValue)) {
+                        // 找到最近的刻度点
+                        val closestGradation = findClosestGradationValue(currentValue)
+                        
+                        // 如果找到了有效刻度点
+                        if (closestGradation != -1f && abs(closestGradation - mLastMoveGradationValue) >= gradationUnit * 0.5f) {
+                            // 计算刻度对应的精确距离
+                            val snapDistance = calculateDistanceFromNumber((closestGradation * 10).toInt())
+                            
+                            // 计算当前位置到刻度的距离
+                            val distanceToSnap = abs(targetDistance - snapDistance)
+                            
+                            // 如果距离在吸附范围内，应用吸附效果
+                            if (distanceToSnap < mSnapRange) {
+                                // 直接跳转到刻度位置
+                                mCurrentDistance = snapDistance
+                                
+                                // 记录当前吸附到的刻度
+                                mLastMoveGradationValue = closestGradation
+                                
+                                // 设置当前吸附位置
+                                mCurrentSnapPosition = mRawTouchPosition
+                                
+                                // 重置手指按下位置为当前位置
+                                mDownX = x
+                                
+                                // 触发震动反馈
+                                vibrateAtGradation()
+                                
+                                // 计算新的当前值
+                                calculateValue()
+                                
+                                return true
+                            }
+                        }
+                    }
+                    
+                    // 不符合吸附条件，正常更新距离
+                    mCurrentDistance = targetDistance
+                } else {
+                    // 不是刻度位置，正常更新距离
+                    mCurrentDistance = targetDistance
+                }
+                
+                // 保存当前值用于下次比较
+                mLastCalculatedValue = currentValue
+                
                 // 计算新的当前值
                 calculateValue()
             }
@@ -576,6 +686,23 @@ class RuleView @JvmOverloads constructor(
     }
 
     /**
+     * 判断指定值是否应该显示文字
+     * @param value 需要判断的值
+     * @return 是否显示文字
+     */
+    private fun shouldShowTextAtValue(value: Float): Boolean {
+        // 检查是否是主刻度值
+        val number = (value * 10).toInt()
+        val perUnitCount = mNumberUnit * numberPerCount
+        if (number % perUnitCount == 0) {
+            return true
+        }
+        
+        // 检查是否是特殊刻度且需要显示文字
+        return mSpecialGradations.find { it.value == value }?.showText == true
+    }
+
+    /**
      * 处理点击事件
      * 计算点击位置对应的值并滚动到该位置
      *
@@ -596,66 +723,14 @@ class RuleView @JvmOverloads constructor(
 
         // 计算目标值并滚动
         val targetNumber = calculateNumberFromDistance(validDistance, true)
+        val targetValue = targetNumber / 10f
 
         logD("点击事件 - 目标计算: targetNumber=%d (值=%s)",
-            targetNumber, (targetNumber / 10f).toString())
+            targetNumber, targetValue.toString())
 
         // 直接使用 setCurrentValue，它会处理平滑滚动和回调
-        setCurrentValue(targetNumber / 10f)
+        setCurrentValue(targetValue)
         return true
-    }
-
-    /**
-     * 将值对齐到最近的刻度
-     * 
-     * @param number 需要对齐的值（放大10倍的整数）
-     * @return 对齐后的值（放大10倍的整数）
-     */
-    private fun alignToNearestGradation(number: Int): Int {
-        // 计算偏移量，四舍五入到最近的刻度
-        val remainder = number % mNumberUnit
-        return if (remainder >= mNumberUnit / 2) {
-            number + (mNumberUnit - remainder)
-        } else {
-            number - remainder
-        }
-    }
-
-    /**
-     * 滑动到最近的刻度线上
-     * 当滑动结束或惯性滑动结束时调用
-     * 确保指针总是对齐到刻度线上
-     */
-    private fun scrollToGradation() {
-        // 保存旧值，用于比较是否变化
-        val oldNumber = mCurrentNumber
-        
-        // 直接计算最近的刻度值
-        val targetNumber = calculateNumberFromDistance(mCurrentDistance, true)
-        
-        // 计算对应的像素距离
-        mCurrentDistance = calculateDistanceFromNumber(targetNumber)
-        // 更新当前值
-        mCurrentNumber = targetNumber
-        // 转回浮点值
-        currentValue = mCurrentNumber / 10f
-
-        // 记录日志
-        logD(
-            "scrollToGradation: mCurrentDistance=%f, mCurrentNumber=%d, currentValue=%f",
-            mCurrentDistance, mCurrentNumber, currentValue
-        )
-
-        // 只有当值改变时才触发回调
-        if (mValueChangedListener != null && oldNumber != mCurrentNumber) {
-            mValueChangedListener!!.onValueChanged(currentValue)
-        }
-
-        // 触发滑动停止回调
-        mScrollStopListener?.onScrollStop(currentValue, formatValueToLabel(currentValue))
-
-        // 重绘视图
-        invalidate()
     }
 
     /**
@@ -680,9 +755,52 @@ class RuleView @JvmOverloads constructor(
             mCurrentDistance, mCurrentNumber, currentValue
         )
         // 如果有监听器，通知值变化
-        if (mValueChangedListener != null && oldNumber != mCurrentNumber) {
-            mValueChangedListener!!.onValueChanged(currentValue)
+        if (oldNumber != mCurrentNumber) {
+            mValueChangedListener?.onValueChanged(currentValue)
+            
+            // 如果滑动到有刻度文字的位置，触发震动
+            if (shouldShowTextAtValue(currentValue) && !isMoved) {
+                vibrateAtGradation()
+            }
         }
+        // 重绘视图
+        invalidate()
+    }
+
+    /**
+     * 滑动到最近的刻度线上
+     * 当滑动结束或惯性滑动结束时调用
+     * 确保指针总是对齐到刻度线上
+     */
+    private fun scrollToGradation() {
+        // 保存旧值，用于比较是否变化
+        val oldNumber = mCurrentNumber
+        
+        // 直接计算最近的刻度值
+        val targetNumber = calculateNumberFromDistance(mCurrentDistance, true)
+        val targetValue = targetNumber / 10f
+        
+        // 计算对应的像素距离
+        mCurrentDistance = calculateDistanceFromNumber(targetNumber)
+        // 更新当前值
+        mCurrentNumber = targetNumber
+        // 转回浮点值
+        currentValue = mCurrentNumber / 10f
+
+        // 记录日志
+        logD(
+            "scrollToGradation: mCurrentDistance=%f, mCurrentNumber=%d, currentValue=%f",
+            mCurrentDistance, mCurrentNumber, currentValue
+        )
+
+        // 只有当值改变时才触发回调
+        if (oldNumber != mCurrentNumber) {
+            mValueChangedListener?.onValueChanged(currentValue)
+        }
+
+        // 触发滑动停止回调
+        mScrollStopListener?.onScrollStop(currentValue, formatValueToLabel(currentValue))
+
         // 重绘视图
         invalidate()
     }
@@ -699,7 +817,6 @@ class RuleView @JvmOverloads constructor(
             if (mScroller!!.currX != mScroller!!.finalX) {
                 // 更新当前距离
                 mCurrentDistance = mScroller!!.currX.toFloat()
-
                 // 直接根据当前距离计算并更新当前值
                 calculateValue()
             } else {
@@ -1345,6 +1462,146 @@ class RuleView @JvmOverloads constructor(
         invalidate()
     }
 
-    /** 记录按下时的时间戳 */
+    /**
+     * 记录按下时的时间戳
+     */
     private var mTouchDownTime: Long = 0
+
+    // 添加新的成员变量
+    /** 记录上一次经过的刻度值 */
+    private var mLastMoveGradationValue: Float = Float.MIN_VALUE
+    
+    /** 吸附效果的作用范围（像素） */
+    private var mSnapRange: Float = 0f
+    
+    /** 当前吸附到的刻度位置 */
+    private var mCurrentSnapPosition: Float = -1f
+    
+    /** 需要移动的最小距离才能脱离吸附（像素） */
+    private var mSnapEscapeDistance: Float = 0f
+    
+    /** 上次手指移动的距离，用于判断移动方向 */
+    private var mLastDx: Float = 0f
+    
+    /** 手指当前的原始位置 */
+    private var mRawTouchPosition: Float = 0f
+    
+    /** 上一次计算的值，用于判断经过刻度 */
+    private var mLastCalculatedValue: Float = -1f
+
+    /**
+     * 检查是否滑过了刻度线
+     * 判断两个值是否跨过了某个刻度点
+     */
+    private fun hasValueCrossedGradation(prevValue: Float, currValue: Float): Boolean {
+        if (prevValue < 0) return false
+        
+        // 获取移动方向
+        val direction = if (currValue > prevValue) 1 else -1
+        
+        // 计算要检查的刻度范围
+        val startValue = min(prevValue, currValue)
+        val endValue = max(prevValue, currValue)
+        
+        // 检查是否有主刻度点在这个范围内
+        val perUnitCount = mNumberUnit * numberPerCount / 10f
+        var checkValue = (startValue / perUnitCount).toInt() * perUnitCount
+        // 调整到下一个刻度点
+        if (checkValue < startValue) {
+            checkValue += perUnitCount
+        }
+        
+        // 检查范围内的所有主刻度点
+        while (checkValue <= endValue) {
+            if (shouldShowTextAtValue(checkValue)) {
+                return true
+            }
+            checkValue += perUnitCount
+        }
+        
+        // 检查是否有特殊刻度在这个范围内
+        for (special in mSpecialGradations) {
+            if (special.showText && special.value in startValue..endValue) {
+                return true
+            }
+        }
+        
+        return false
+    }
+    
+    /**
+     * 查找离当前值最近的刻度点
+     */
+    private fun findClosestGradationValue(value: Float): Float {
+        // 先检查是否恰好在刻度点上
+        if (shouldShowTextAtValue(value)) {
+            return value
+        }
+        
+        // 计算主刻度间隔
+        val perUnitCount = mNumberUnit * numberPerCount / 10f
+        
+        // 找到最近的主刻度
+        val lowerMainGradation = (value / perUnitCount).toInt() * perUnitCount
+        val upperMainGradation = lowerMainGradation + perUnitCount
+        
+        // 初始化最近刻度和距离
+        var closestGradation = -1f
+        var minDistance = Float.MAX_VALUE
+        
+        // 检查下方主刻度
+        if (shouldShowTextAtValue(lowerMainGradation)) {
+            val distance = abs(value - lowerMainGradation)
+            if (distance < minDistance) {
+                minDistance = distance
+                closestGradation = lowerMainGradation
+            }
+        }
+        
+        // 检查上方主刻度
+        if (shouldShowTextAtValue(upperMainGradation)) {
+            val distance = abs(value - upperMainGradation)
+            if (distance < minDistance) {
+                minDistance = distance
+                closestGradation = upperMainGradation
+            }
+        }
+        
+        // 检查特殊刻度
+        for (special in mSpecialGradations) {
+            if (special.showText) {
+                val distance = abs(value - special.value)
+                if (distance < minDistance) {
+                    minDistance = distance
+                    closestGradation = special.value
+                }
+            }
+        }
+        
+        return closestGradation
+    }
+    
+    /**
+     * 在刻度处触发震动
+     */
+    private fun vibrateAtGradation() {
+        // 获取系统震动服务
+        val context = contextSafely
+        if (context != null) {
+            val vibrator = context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+            if (vibrator != null && vibrator.hasVibrator()) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    // 降低震动强度
+                    vibrator.vibrate(VibrationEffect.createOneShot(
+                        25, // 震动时长，从40ms降低到25ms
+                        100  // 震动振幅，从180降低到100
+                    ))
+                } else {
+                    @Suppress("DEPRECATION")
+                    // 对于低版本
+                    vibrator.vibrate(25) // 从40ms降低到25ms
+                }
+            }
+        }
+    }
 }
