@@ -261,6 +261,36 @@ class RuleView @JvmOverloads constructor(
     /** 特殊长刻度规则列表  */
     private var mSpecialGradations: MutableList<SpecialGradationRule> = mutableListOf()
 
+    /** 当前是否处于吸附状态 */
+    private var isSnapped = false
+    
+    /** 吸附时的刻度值 */
+    private var mSnappedValue = 0
+    
+    /** 吸附时的滑动方向：1表示向右，-1表示向左 */
+    private var mSnapDirection = 0
+    
+    /** 脱离吸附需要的最小距离（像素） */
+    private var mSnapEscapeDistance = 0f
+
+    /** 吸附的检测阈值（像素） */
+    private var mSnapTriggerDistance = 0f
+
+    /** 上一次移动的位置，用于判断方向 */
+    private var mLastMoveX = 0f
+
+    /** 按下时的初始位置，用于计算总移动距离 */
+    private var mStartMoveX = 0f
+
+    /** 记录按下时的时间戳 */
+    private var mTouchDownTime: Long = 0
+    
+    /** 记录吸附开始时的时间戳 */
+    private var mLastSnappedTime: Long = 0
+    
+    /** 记录吸附开始时的吸附值 */
+    private var mLastSnappedValue: Int = 0
+
     @Deprecated("请使用 {@link IOnValueChangedListener} 代替")
     interface OnValueChangedListener : IOnValueChangedListener
 
@@ -383,6 +413,12 @@ class RuleView @JvmOverloads constructor(
         mTextPaint!!.color = textColor
         // 创建滚动器用于实现平滑滚动效果
         mScroller = Scroller(context)
+        
+        // 计算吸附相关的距离，8dp和5dp转为像素
+        mSnapEscapeDistance = dp2px(12f).toFloat()
+        mSnapTriggerDistance = dp2px(3f).toFloat()
+        
+        Log.d("GradationView", "初始化 - 吸附脱离距离: ${mSnapEscapeDistance}px (12dp), 吸附触发距离: ${mSnapTriggerDistance}px (3dp)")
     }
 
     /**
@@ -497,6 +533,9 @@ class RuleView @JvmOverloads constructor(
                 mTouchDownTime = System.currentTimeMillis()
                 // 重置移动标志
                 isMoved = false
+                // 重置初始移动位置
+                mStartMoveX = x.toFloat()
+                Log.d("GradationView", "按下事件 - 初始位置: x=$x")
             }
             MotionEvent.ACTION_MOVE -> {
                 // 计算X方向移动距离
@@ -507,15 +546,81 @@ class RuleView @JvmOverloads constructor(
                     val dy = y - mLastY
                     // 滑动的触发条件：水平滑动大于垂直滑动；滑动距离大于阈值
                     if (abs(dx.toDouble()) < abs(dy.toDouble()) || abs((x - mDownX).toDouble()) < TOUCH_SLOP) {
+                        mLastX = x
+                        mLastY = y
                         return true
                     }
                     // 设置已开始滑动标志
                     isMoved = true
                 }
+                
+                // 添加日志，输出滑动信息
+                Log.d("GradationView", "滑动事件 - 偏移量: dx=$dx, 绝对位置: x=$x, mLastX=$mLastX, 当前距离: mCurrentDistance=$mCurrentDistance")
+
+                // 处理方向性吸附
+                if (isSnapped) {
+                    // 计算当前滑动方向（只考虑有效的移动）
+                    val currentDirection = if (dx > 1) 1 else if (dx < -1) -1 else 0
+                    
+                    // 如果有明确的滑动方向，并且与吸附方向相反，立即解除吸附
+                    if (currentDirection != 0 && currentDirection != mSnapDirection) {
+                        isSnapped = false
+                        Log.d("GradationView", "滑动事件 - 方向改变，解除吸附: 新方向=$currentDirection, 原方向=$mSnapDirection, 起始位置=$mLastMoveX, 当前位置=$x")
+                        
+                        // 保存当前的吸附值，防止立即再次吸附到同一位置
+                        val lastSnappedValue = mSnappedValue
+                        mSnapDirection = 0
+                        
+                        // 添加临时锁定逻辑，防止立即再次吸附
+                        mLastSnappedTime = System.currentTimeMillis()
+                        mLastSnappedValue = lastSnappedValue
+                    } else if (currentDirection == mSnapDirection || currentDirection == 0) {
+                        // 同方向滑动，检查从原始吸附位置移动的总距离
+                        val movedDistance = abs(x - mLastMoveX)
+                        
+                        // 添加日志，输出吸附状态信息
+                        Log.d("GradationView", "滑动事件 - 吸附状态: movedDistance=$movedDistance, 阈值=$mSnapEscapeDistance, 吸附值=${mSnappedValue/10f}, 起始位置=$mLastMoveX, 当前位置=$x, 方向=$currentDirection, 总移动=${abs(x - mStartMoveX)}")
+                        
+                        // 如果移动距离未超过阈值，保持在吸附位置
+                        if (movedDistance < mSnapEscapeDistance) {
+                            mLastX = x
+                            mLastY = y
+                            return true
+                        } else {
+                            // 超过阈值，解除吸附
+                            isSnapped = false
+                            mSnapDirection = 0
+                            
+                            // 保存当前的吸附值，防止立即再次吸附到同一位置
+                            val lastSnappedValue = mSnappedValue
+                            
+                            Log.d("GradationView", "滑动事件 - 移动距离超过阈值，解除吸附: movedDistance=$movedDistance, 吸附值=${lastSnappedValue/10f}, 起始位置=$mLastMoveX")
+                            
+                            // 添加临时锁定逻辑，防止立即再次吸附
+                            mLastSnappedTime = System.currentTimeMillis()
+                            mLastSnappedValue = lastSnappedValue
+                        }
+                    }
+                }
+
                 // 更新当前距离（注意dx取反，手指右滑，刻度左移）
+                val oldDistance = mCurrentDistance
                 mCurrentDistance += -dx.toFloat()
+                
+                // 添加日志，输出距离变化
+                Log.d("GradationView", "滑动事件 - 距离更新: 旧距离=$oldDistance, 新距离=$mCurrentDistance, 变化=${-dx.toFloat()}")
+                
+                // 检查是否需要吸附到长刻度
+                checkAndSnapToLongGradation(dx)
+                
                 // 计算新的当前值
                 calculateValue()
+                
+                // 只有在非吸附状态下才更新最后移动的位置
+                if (!isSnapped) {
+                    mLastMoveX = x.toFloat()
+                    Log.d("GradationView", "更新最后移动位置: $mLastMoveX (非吸附状态)")
+                }
             }
             MotionEvent.ACTION_UP -> {
                 if (!isMoved) {
@@ -529,6 +634,10 @@ class RuleView @JvmOverloads constructor(
                     }
                 }
 
+                // 重置吸附状态
+                isSnapped = false
+                mSnapDirection = 0
+
                 // 处理滑动结束（手指抬起）
                 // 计算滑动速度，用于惯性滑动
                 mVelocityTracker!!.computeCurrentVelocity(1000, MAX_FLING_VELOCITY.toFloat())
@@ -541,9 +650,6 @@ class RuleView @JvmOverloads constructor(
                         0, mNumberRangeDistance.toInt(), 0, 0
                     )
                     invalidate()
-                } else {
-                    // 速度较小，滑动结束，对齐到最近的刻度
-                    scrollToGradation()
                 }
             }
             MotionEvent.ACTION_CANCEL -> {
@@ -551,20 +657,21 @@ class RuleView @JvmOverloads constructor(
                 if (!isMoved) {
                     // 这是一个点击被取消的事件，保持当前位置不变
                     return true
-                } else {
-                    // 处理滑动被取消（类似手指抬起）
-                    mVelocityTracker!!.computeCurrentVelocity(1000, MAX_FLING_VELOCITY.toFloat())
-                    val xVelocity = mVelocityTracker!!.xVelocity.toInt()
-                    if (abs(xVelocity.toDouble()) >= MIN_FLING_VELOCITY) {
-                        mScroller!!.fling(
-                            mCurrentDistance.toInt(), 0, -xVelocity, 0,
-                            0, mNumberRangeDistance.toInt(), 0, 0
-                        )
-                        invalidate()
-                    } else {
-                        // 速度较小，滑动结束，对齐到最近的刻度
-                        scrollToGradation()
-                    }
+                }
+
+                // 重置吸附状态
+                isSnapped = false
+                mSnapDirection = 0
+
+                // 处理滑动被取消（类似手指抬起）
+                mVelocityTracker!!.computeCurrentVelocity(1000, MAX_FLING_VELOCITY.toFloat())
+                val xVelocity = mVelocityTracker!!.xVelocity.toInt()
+                if (abs(xVelocity.toDouble()) >= MIN_FLING_VELOCITY) {
+                    mScroller!!.fling(
+                        mCurrentDistance.toInt(), 0, -xVelocity, 0,
+                        0, mNumberRangeDistance.toInt(), 0, 0
+                    )
+                    invalidate()
                 }
             }
             else -> {}
@@ -583,7 +690,6 @@ class RuleView @JvmOverloads constructor(
      * @return true表示事件已处理
      */
     private fun handleClickEvent(x: Int): Boolean {
-        // 计算点击位置对应的距离，需要减去 paddingLeft 才是相对于内容区域的位置
         val clickX = x - paddingLeft
         val clickDistance = (clickX - mHalfWidth) + mCurrentDistance
         // 限定点击范围在有效区间内
@@ -622,43 +728,6 @@ class RuleView @JvmOverloads constructor(
     }
 
     /**
-     * 滑动到最近的刻度线上
-     * 当滑动结束或惯性滑动结束时调用
-     * 确保指针总是对齐到刻度线上
-     */
-    private fun scrollToGradation() {
-        // 保存旧值，用于比较是否变化
-        val oldNumber = mCurrentNumber
-        
-        // 直接计算最近的刻度值
-        val targetNumber = calculateNumberFromDistance(mCurrentDistance, true)
-        
-        // 计算对应的像素距离
-        mCurrentDistance = calculateDistanceFromNumber(targetNumber)
-        // 更新当前值
-        mCurrentNumber = targetNumber
-        // 转回浮点值
-        currentValue = mCurrentNumber / 10f
-
-        // 记录日志
-        logD(
-            "scrollToGradation: mCurrentDistance=%f, mCurrentNumber=%d, currentValue=%f",
-            mCurrentDistance, mCurrentNumber, currentValue
-        )
-
-        // 只有当值改变时才触发回调
-        if (mValueChangedListener != null && oldNumber != mCurrentNumber) {
-            mValueChangedListener!!.onValueChanged(currentValue)
-        }
-
-        // 触发滑动停止回调
-        mScrollStopListener?.onScrollStop(currentValue, formatValueToLabel(currentValue))
-
-        // 重绘视图
-        invalidate()
-    }
-
-    /**
      * 根据distance距离，计算当前刻度值
      * 并触发值变化回调
      */
@@ -679,6 +748,10 @@ class RuleView @JvmOverloads constructor(
             "calculateValue: mCurrentDistance=%f, mCurrentNumber=%d, currentValue=%f",
             mCurrentDistance, mCurrentNumber, currentValue
         )
+        
+        // 添加更详细的日志输出
+        Log.d("GradationView", "值计算 - 当前距离=$mCurrentDistance, 当前值=$currentValue, 原始值=$oldNumber")
+        
         // 如果有监听器，通知值变化
         if (mValueChangedListener != null && oldNumber != mCurrentNumber) {
             mValueChangedListener!!.onValueChanged(currentValue)
@@ -702,9 +775,6 @@ class RuleView @JvmOverloads constructor(
 
                 // 直接根据当前距离计算并更新当前值
                 calculateValue()
-            } else {
-                // 滚动结束，对齐到最近的刻度
-                scrollToGradation()
             }
         }
     }
@@ -763,8 +833,11 @@ class RuleView @JvmOverloads constructor(
 
         // 扩展绘制范围，确保滑动时两侧有足够的刻度
         val expendUnit = mNumberUnit shl EXTEND_UNIT_SHIFT
-        var startNum = max(mMinNumber, leftValue - expendUnit)
-        var endNum = min(mMaxNumber, rightValue + expendUnit)
+        val startNum = max(mMinNumber, leftValue - expendUnit)
+        val endNum = min(mMaxNumber, rightValue + expendUnit)
+        
+        // 计算相邻两条长刻度线之间的刻度数量
+        val perUnitCount = mNumberUnit * numberPerCount
         
         // 依次绘制每个可见的刻度
         var currentNum = startNum
@@ -773,7 +846,6 @@ class RuleView @JvmOverloads constructor(
             val distance = mHalfWidth + (calculateDistanceFromNumber(currentNum) - mCurrentDistance)
             
             // 判断是否是长刻度（整数倍刻度）或特殊刻度
-            val perUnitCount = mNumberUnit * numberPerCount
             val currentValue = currentNum / 10f
             val isSpecialGradation = mSpecialGradations.any { it.value == currentValue }
             val isLongGradation = currentNum % perUnitCount == 0 || isSpecialGradation
@@ -796,13 +868,15 @@ class RuleView @JvmOverloads constructor(
                 if (shouldShowText) {
                     // 绘制刻度值文本
                     val fNum = currentValue
-                    var text = fNum.toString()
-                    // 去掉小数点后的.0
-                    if (text.endsWith(".0")) {
-                        text = text.substring(0, text.length - 2)
+                    val text = buildString {
+                        append(fNum.toString())
+                        // 去掉小数点后的.0
+                        if (endsWith(".0")) {
+                            setLength(length - 2)
+                        }
+                        // 添加单位标识
+                        append("x")
                     }
-                    // 添加单位标识
-                    text += "x"
 
                     // 计算文本宽度
                     val textWidth = mTextPaint!!.measureText(text)
@@ -810,11 +884,11 @@ class RuleView @JvmOverloads constructor(
                     // 计算当前刻度与中心线的距离，用于文本透明度渐变
                     val distanceToCenter = abs((distance - mHalfWidth).toDouble()).toFloat()
                     // 设置文本透明度
-                    var alpha = MAX_ALPHA
-                    val fadeDistance = textWidth * TEXT_FADE_DISTANCE_FACTOR
-                    if (distanceToCenter < fadeDistance) {
-                        val ratio = distanceToCenter / fadeDistance
-                        alpha = (MAX_ALPHA * (ratio * ratio)).toInt()
+                    val alpha = if (distanceToCenter < textWidth * TEXT_FADE_DISTANCE_FACTOR) {
+                        val ratio = distanceToCenter / (textWidth * TEXT_FADE_DISTANCE_FACTOR)
+                        (MAX_ALPHA * (ratio * ratio)).toInt()
+                    } else {
+                        MAX_ALPHA
                     }
                     mTextPaint!!.alpha = alpha
 
@@ -1345,6 +1419,91 @@ class RuleView @JvmOverloads constructor(
         invalidate()
     }
 
-    /** 记录按下时的时间戳 */
-    private var mTouchDownTime: Long = 0
+    /**
+     * 检查并吸附到长刻度
+     * 当滑动经过长刻度点时，会有吸附效果
+     * 
+     * @param dx 当前X方向移动的距离
+     */
+    private fun checkAndSnapToLongGradation(dx: Int) {
+        // 如果已经处于吸附状态，不需要检查
+        if (isSnapped) {
+            return
+        }
+        
+        // 计算当前值对应的刻度
+        val currentNum = calculateNumberFromDistance(mCurrentDistance, true)
+        
+        // 判断最近一次解除吸附的刻度值，避免在短时间内反复吸附同一刻度
+        val currentTime = System.currentTimeMillis()
+        val timeSinceLastSnap = currentTime - mLastSnappedTime
+        
+        // 如果距离上次吸附时间过短且当前值接近上次吸附值，则跳过吸附
+        if (timeSinceLastSnap < 300 && abs(currentNum - mLastSnappedValue) < mNumberUnit * 2) {
+            Log.d("GradationView", "忽略吸附 - 刚刚解除吸附: 时间差=$timeSinceLastSnap ms, 当前值=$currentNum, 上次吸附值=$mLastSnappedValue")
+            return
+        }
+        
+        // 判断是否靠近长刻度
+        val perUnitCount = mNumberUnit * numberPerCount
+        
+        // 检查是否接近长刻度
+        val remainder = currentNum % perUnitCount
+        val distanceToLongGradation = min(remainder, perUnitCount - remainder)
+        
+        // 添加日志，输出刻度检查信息
+        Log.d("GradationView", "刻度检查 - 当前值=$currentNum, 余数=$remainder, 到长刻度距离=$distanceToLongGradation, 单位=$mNumberUnit")
+        
+        // 如果接近长刻度，考虑特殊刻度
+        if (distanceToLongGradation < mNumberUnit) {
+            var isNearLongGradation = true
+            
+            // 确定最近的长刻度值
+            var nearestLongGradation = currentNum
+            if (remainder < perUnitCount / 2) {
+                nearestLongGradation = currentNum - remainder
+            } else {
+                nearestLongGradation = currentNum + (perUnitCount - remainder)
+            }
+            
+            // 检查特殊刻度
+            val currentValue = currentNum / 10f
+            for (special in mSpecialGradations) {
+                val specialNum = (special.value * 10).toInt()
+                // 如果靠近特殊刻度，使用特殊刻度作为吸附点
+                if (abs(currentNum - specialNum) < mNumberUnit) {
+                    nearestLongGradation = specialNum
+                    isNearLongGradation = true
+                    Log.d("GradationView", "发现特殊刻度 - 特殊值=${special.value}, 当前值=$currentValue")
+                    break
+                }
+            }
+            
+            // 如果接近长刻度或特殊刻度，启用吸附
+            if (isNearLongGradation) {
+                // 计算目标距离和当前距离的差值
+                val targetDistance = calculateDistanceFromNumber(nearestLongGradation)
+                val distance = abs(targetDistance - mCurrentDistance)
+                
+                Log.d("GradationView", "长刻度检测 - 最近长刻度=${nearestLongGradation/10f}, 目标距离=$targetDistance, 当前距离=$mCurrentDistance, 差值=$distance")
+                
+                // 如果距离足够近，触发吸附
+                if (distance < mSnapTriggerDistance) {  // 使用dp转px后的值
+                    // 设置吸附状态
+                    isSnapped = true
+                    mSnappedValue = nearestLongGradation
+                    mSnapDirection = if (dx > 0) 1 else -1
+                    
+                    // 记录吸附开始时的触摸位置（关键步骤，使用当前触摸位置）
+                    mLastMoveX = mLastX.toFloat()
+                    
+                    // 直接将当前距离设为目标距离（吸附）
+                    mCurrentDistance = targetDistance
+                    
+                    Log.d("GradationView", "触发吸附 - 吸附值=${nearestLongGradation/10f}, 方向=$mSnapDirection, 吸附位置=$mCurrentDistance, 初始吸附手指位置=$mLastMoveX")
+                }
+            }
+        }
+    }
 }
+// 测试内容

@@ -23,7 +23,7 @@
         <item name="zjun_indicatorLineColor">#48b975</item>
         
         <!-- 尺寸设置 -->
-        <item name="gv_shortLineWidth">1dp</item>
+        <item name="gv_shortLineWidth">2dp</item>
         <item name="gv_longLineWidth">2dp</item>
         <item name="gv_shortGradationLen">16dp</item>
         <item name="gv_longGradationLen">32dp</item>
@@ -31,7 +31,7 @@
         <item name="zjun_indicatorLineWidth">2dp</item>
         <item name="gv_indicatorLineLen">35dp</item>
         <item name="gv_gradationNumberGap">8dp</item>
-        <item name="gv_textGradationGap">5dp</item>
+        <item name="gv_textGradationGap">8dp</item>
     </style>
 
 </resources>

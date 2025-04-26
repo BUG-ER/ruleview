@@ -95,10 +95,10 @@ public class MainActivity extends AppCompatActivity {
         List<RuleView.GradationGapRule> rules = new ArrayList<>();
         
         // 规则1: 0到1.0之间刻度间隔为40px
-        rules.add(new RuleView.GradationGapRule(0.1f, 1.0f, 80.0f));
+        rules.add(new RuleView.GradationGapRule(0.1f, 1.0f, 40.0f));
         
         // 规则2: 1.0到4.0之间刻度间隔为20px
-        rules.add(new RuleView.GradationGapRule(1.0f, 10.0f, 20.0f));
+        rules.add(new RuleView.GradationGapRule(1.0f, 10.0f, 25.0f));
         
         // 设置刻度间隔规则
         gvRule.setGradationGapRules(rules, 0.0f);
