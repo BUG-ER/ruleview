@@ -3,6 +3,7 @@ package com.zjun.demo.ruleview;
 import android.os.Bundle;
 import android.support.annotation.IdRes;
 import android.support.v7.app.AppCompatActivity;
+import android.util.Log;
 import android.view.View;
 import android.widget.LinearLayout;
 import android.widget.TextView;
@@ -46,6 +47,8 @@ public class MainActivity extends AppCompatActivity {
                     str = str.substring(0, str.length() - 2);
                 }
                 tvGvValue.setText(str + "x");
+                Log.d("GradationView", "值计算 - 当前距离=  " + tvGvValue.getText());
+
             }
         });
         gvRule.setOnScrollStopListener(new IOnScrollStopListener() {

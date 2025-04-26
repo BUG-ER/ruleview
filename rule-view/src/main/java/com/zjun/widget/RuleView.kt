@@ -204,7 +204,7 @@ class RuleView @JvmOverloads constructor(
      * 刻度数值最小单位：gradationUnit * 10
      * 用于内部计算，避免浮点精度问题
      */
-    private var mNumberUnit = 0
+    private var mNumberUnit = 1
 
     /**
      * 当前数值与最小值的距离：(mCurrentNumber - mMinNumber) / mNumberUnit * gradationGap
@@ -290,6 +290,9 @@ class RuleView @JvmOverloads constructor(
     
     /** 记录吸附开始时的吸附值 */
     private var mLastSnappedValue: Int = 0
+
+    /** 所有可能的吸附点集合，缓存起来避免重复计算 */
+    private var mAllSnapPoints: MutableMap<Int, Int> = mutableMapOf()
 
     @Deprecated("请使用 {@link IOnValueChangedListener} 代替")
     interface OnValueChangedListener : IOnValueChangedListener
@@ -419,6 +422,46 @@ class RuleView @JvmOverloads constructor(
         mSnapTriggerDistance = dp2px(3f).toFloat()
         
         Log.d("GradationView", "初始化 - 吸附脱离距离: ${mSnapEscapeDistance}px (12dp), 吸附触发距离: ${mSnapTriggerDistance}px (3dp)")
+        
+        // 预先计算所有可能的吸附点
+        initAllSnapPoints()
+    }
+
+    /**
+     * 初始化所有可能的吸附点
+     * 预先计算所有长刻度和特殊刻度的位置，并保存到缓存中
+     */
+    private fun initAllSnapPoints() {
+        // 清空现有的吸附点缓存
+        mAllSnapPoints.clear()
+        
+        // 只有在有效范围内才计算
+        if (mMinNumber >= mMaxNumber || mNumberUnit <= 0) {
+            return
+        }
+        
+        // 计算相邻两条长刻度线之间的刻度数量
+        val perUnitCount = mNumberUnit * numberPerCount
+        
+        // 添加所有长刻度点（整数刻度）
+        var currentNum = (mMinNumber / perUnitCount) * perUnitCount
+        while (currentNum <= mMaxNumber) {
+            if (currentNum >= mMinNumber) {
+                mAllSnapPoints[currentNum] = currentNum
+            }
+            currentNum += perUnitCount
+        }
+        
+        // 添加所有特殊刻度点
+        for (special in mSpecialGradations) {
+            val specialNum = (special.value * 10).toInt()
+            // 只添加有效范围内的特殊刻度
+            if (specialNum >= mMinNumber && specialNum <= mMaxNumber) {
+                mAllSnapPoints[specialNum] = specialNum
+            }
+        }
+        
+        Log.d("GradationView", "初始化吸附点 - 共计算${mAllSnapPoints.size}个可能的吸附点")
     }
 
     /**
@@ -434,8 +477,10 @@ class RuleView @JvmOverloads constructor(
         mNumberUnit = (gradationUnit * 10).toInt()
 
         recalculateDistances()
+        
+        // 当值范围或单位改变时，需要重新计算所有可能的吸附点
+        initAllSnapPoints()
     }
-
 
     /**
      * 测量控件尺寸
@@ -701,19 +746,47 @@ class RuleView @JvmOverloads constructor(
             clickDistance.toString(), validDistance.toString(), mCurrentDistance.toString())
 
         // 计算目标值并滚动
-        val targetNumber = calculateNumberFromDistance(validDistance, true)
+        var targetNumber = calculateNumberFromDistance(validDistance, true)
+
+        // 获取点击位置附近的特殊点和长刻度点
+        val nearbyPoints = getSnapPoints(targetNumber)
+
+        // 如果有点击位置附近的特殊点，判断是否应该直接跳转到特殊点
+        val perUnitCount = mNumberUnit * numberPerCount
+
+        // 在刻度图上查找最近的刻度
+        for (point in nearbyPoints) {
+            val pointDistance = calculateDistanceFromNumber(point)
+            val distanceToPoint = abs(validDistance - pointDistance)
+
+            // 如果点击位置非常接近某个刻度（特别是长刻度或特殊刻度），优先选择该刻度
+            // 这里使用屏幕像素距离而不是值距离，更准确地反映用户的点击意图
+            if (distanceToPoint < mSnapTriggerDistance * 2) {
+                targetNumber = point
+                Log.d("GradationView", "点击事件 - 检测到接近的特殊刻度: ${point/10f}x, 距离=$distanceToPoint")
+                break
+            }
+        }
 
         logD("点击事件 - 目标计算: targetNumber=%d (值=%s)",
             targetNumber, (targetNumber / 10f).toString())
 
+        Log.d("GradationView", "点击事件 - 最终确定目标: targetNumber=$targetNumber, 值=${targetNumber/10f}x")
+
+        // 确保严格使用计算出的值，防止精度丢失
+        val exactValue = targetNumber / 10f
+        currentValue = exactValue
+        mCurrentNumber = targetNumber
+
         // 直接使用 setCurrentValue，它会处理平滑滚动和回调
-        setCurrentValue(targetNumber / 10f)
+        setCurrentValue(exactValue)
+
         return true
     }
 
     /**
      * 将值对齐到最近的刻度
-     * 
+     *
      * @param number 需要对齐的值（放大10倍的整数）
      * @return 对齐后的值（放大10倍的整数）
      */
@@ -741,19 +814,25 @@ class RuleView @JvmOverloads constructor(
         val oldNumber = mCurrentNumber
         // 根据当前距离计算刻度值（注意使用特定区间规则）
         mCurrentNumber = calculateNumberFromDistance(mCurrentDistance, false)
-        // 转回浮点值
-        currentValue = mCurrentNumber / 10f
+        // 转回浮点值 - 保持精确的转换，不引入新的精度损失
+        val newValue = mCurrentNumber / 10f
+
+        // 确保当前值和整数的一致性
+        currentValue = newValue
+
         // 记录日志
         logD(
             "calculateValue: mCurrentDistance=%f, mCurrentNumber=%d, currentValue=%f",
             mCurrentDistance, mCurrentNumber, currentValue
         )
-        
+
         // 添加更详细的日志输出
-        Log.d("GradationView", "值计算 - 当前距离=$mCurrentDistance, 当前值=$currentValue, 原始值=$oldNumber")
-        
+        Log.d("GradationView", "值计算 - 当前距离=$mCurrentDistance, 当前值=$currentValue, 整数值=$mCurrentNumber, 原始值=$oldNumber")
+
         // 如果有监听器，通知值变化
         if (mValueChangedListener != null && oldNumber != mCurrentNumber) {
+            // 添加额外日志，确保传递给回调的值是准确的
+            Log.d("GradationView", "触发值变化回调 - 当前值=$currentValue, 整数值=$mCurrentNumber, 原始值=$oldNumber")
             mValueChangedListener!!.onValueChanged(currentValue)
         }
         // 重绘视图
@@ -835,16 +914,16 @@ class RuleView @JvmOverloads constructor(
         val expendUnit = mNumberUnit shl EXTEND_UNIT_SHIFT
         val startNum = max(mMinNumber, leftValue - expendUnit)
         val endNum = min(mMaxNumber, rightValue + expendUnit)
-        
+
         // 计算相邻两条长刻度线之间的刻度数量
         val perUnitCount = mNumberUnit * numberPerCount
-        
+
         // 依次绘制每个可见的刻度
         var currentNum = startNum
         while (currentNum <= endNum) {
             // 计算当前刻度对应的x坐标
             val distance = mHalfWidth + (calculateDistanceFromNumber(currentNum) - mCurrentDistance)
-            
+
             // 判断是否是长刻度（整数倍刻度）或特殊刻度
             val currentValue = currentNum / 10f
             val isSpecialGradation = mSpecialGradations.any { it.value == currentValue }
@@ -854,7 +933,7 @@ class RuleView @JvmOverloads constructor(
                 // 长刻度：使用长刻度颜色和宽度
                 mPaint!!.color = longLineColor
                 mPaint!!.strokeWidth = longLineWidth
-                
+
                 // 从文字下方开始绘制刻度
                 canvas.drawLine(
                     distance, textBaseline + textGradationGap,
@@ -862,7 +941,7 @@ class RuleView @JvmOverloads constructor(
                 )
 
                 // 判断是否需要绘制文本
-                val shouldShowText = currentNum % perUnitCount == 0 || 
+                val shouldShowText = currentNum % perUnitCount == 0 ||
                     mSpecialGradations.find { it.value == currentValue }?.showText == true
 
                 if (shouldShowText) {
@@ -908,7 +987,7 @@ class RuleView @JvmOverloads constructor(
             // 移动到下一个刻度
             currentNum += mNumberUnit
         }
-        
+
         // 恢复文本画笔的透明度
         mTextPaint!!.alpha = 255
     }
@@ -1013,6 +1092,8 @@ class RuleView @JvmOverloads constructor(
         this.currentValue = currentValue
         mCurrentNumber = (this.currentValue * 10).toInt()
 
+        Log.d("GradationView", "setCurrentValue - 设置值=${currentValue}, 转换为整数=${mCurrentNumber}")
+
         // 使用区间规则计算新位置
         val newDistance = calculateDistanceFromNumber(mCurrentNumber)
         val dx = (newDistance - mCurrentDistance).toInt()
@@ -1027,11 +1108,16 @@ class RuleView @JvmOverloads constructor(
 
         // 启动滚动动画
         mScroller!!.startScroll(mCurrentDistance.toInt(), 0, dx, 0, duration)
-        
+
         // 立即触发一次值变化回调，不等待动画完成
-        mValueChangedListener?.onValueChanged(currentValue)
-        mScrollStopListener?.onScrollStop(currentValue, formatValueToLabel(currentValue))
-        
+        if (mValueChangedListener != null) {
+            Log.d("GradationView", "setCurrentValue - 触发回调: ${currentValue}")
+            mValueChangedListener!!.onValueChanged(currentValue)
+        }
+        if (mScrollStopListener != null) {
+            mScrollStopListener!!.onScrollStop(currentValue, formatValueToLabel(currentValue))
+        }
+
         // 请求重绘，触发动画
         postInvalidate()
     }
@@ -1052,11 +1138,11 @@ class RuleView @JvmOverloads constructor(
 
         // 验证规则列表覆盖了整个值范围
         val sortedRules = gapRules.sortedBy { it.startValue }
-        
+
         // 更新视图的最小值和最大值
         this.minValue = sortedRules.first().startValue
         this.maxValue = sortedRules.last().endValue
-        
+
         // 如果指定了初始值，使用它；否则确保当前值在新的范围内
         if (initialValue != null) {
             currentValue = min(max(initialValue, minValue), maxValue)
@@ -1065,27 +1151,27 @@ class RuleView @JvmOverloads constructor(
         } else if (currentValue > maxValue) {
             currentValue = maxValue
         }
-        
+
         // 检查第一个规则的起始值是否等于最小值
         require(abs(sortedRules.first().startValue - minValue) < FLOAT_PRECISION) {
             "第一个规则的起始值(${sortedRules.first().startValue})必须等于最小值($minValue)"
         }
-        
+
         // 检查最后一个规则的结束值是否等于最大值
         require(abs(sortedRules.last().endValue - maxValue) < FLOAT_PRECISION) {
             "最后一个规则的结束值(${sortedRules.last().endValue})必须等于最大值($maxValue)"
         }
-        
+
         // 检查规则是否连续且不重叠
         for (i in 0 until sortedRules.size - 1) {
             require(abs(sortedRules[i].endValue - sortedRules[i + 1].startValue) < FLOAT_PRECISION) {
                 "规则必须连续且不重叠：规则${i}的结束值(${sortedRules[i].endValue})必须等于规则${i+1}的起始值(${sortedRules[i + 1].startValue})"
             }
         }
-        
+
         // 保存规则列表
         mGradationGapRules = sortedRules.toMutableList()
-        
+
         // 转换值并重新计算内部参数
         convertValue2Number()
 
@@ -1093,7 +1179,7 @@ class RuleView @JvmOverloads constructor(
         if (mValueChangedListener != null) {
             mValueChangedListener!!.onValueChanged(currentValue)
         }
-        
+
         postInvalidate()
     }
 
@@ -1114,14 +1200,14 @@ class RuleView @JvmOverloads constructor(
             val rangeNumber = endNum - startNum
             mNumberRangeDistance += rangeNumber / mNumberUnit.toFloat() * rule.gapPx
         }
-        
+
         // 重新计算当前距离
         mCurrentDistance = 0f
         var currentNum = mMinNumber
         for (rule in mGradationGapRules) {
             val startNum = (rule.startValue * 10).toInt()
             val endNum = (rule.endValue * 10).toInt()
-            
+
             if (mCurrentNumber <= endNum) {
                 // 当前值在这个规则范围内
                 mCurrentDistance += (mCurrentNumber - startNum) / mNumberUnit.toFloat() * rule.gapPx
@@ -1133,7 +1219,7 @@ class RuleView @JvmOverloads constructor(
             }
         }
     }
-    
+
     /**
      * 根据当前距离计算对应的值，并返回刻度值
      * 考虑不同区间的刻度间隔
@@ -1146,29 +1232,67 @@ class RuleView @JvmOverloads constructor(
         if (mGradationGapRules.isEmpty()) {
             return 0
         }
-        
+
         var remainingDistance = distance
         var currentNum = mMinNumber
-        
+
+        // 添加调试日志
+        Log.d("GradationView", "计算值 - 起始: 距离=$distance, 是否四舍五入=$roundMode")
+
         for (rule in mGradationGapRules) {
             val startNum = (rule.startValue * 10).toInt()
             val endNum = (rule.endValue * 10).toInt()
             val rangeNumber = endNum - startNum
             val ruleDistance = rangeNumber / mNumberUnit.toFloat() * rule.gapPx
-            
+
             if (remainingDistance <= ruleDistance) {
                 // 在当前规则范围内
                 // 计算在当前规则下的精确刻度位置
                 val exactScale = remainingDistance / rule.gapPx
-                val scaleNumber = if (roundMode) {
+                var scaleNumber = if (roundMode) {
                     Math.round(exactScale)  // 四舍五入到最近的刻度
                 } else {
                     Math.floor(exactScale.toDouble()).toInt()  // 向下取整到最近的刻度
                 }
-                val exactNumber = startNum + (scaleNumber * mNumberUnit)
-                
+
+                // 更精确的计算，防止由于浮点误差导致的计算偏差
+                val exactPosition = exactScale * rule.gapPx
+                val perUnitCount = mNumberUnit * numberPerCount
+
+                // 计算精确的刻度值
+                var exactNumber = startNum + (scaleNumber * mNumberUnit)
+
+                // 检查是否非常接近整数刻度（如1.0、2.0等）或特殊刻度
+                val potentialInteger = (startNum / perUnitCount) * perUnitCount +
+                        (scaleNumber * perUnitCount / mNumberUnit) * perUnitCount
+
+                if (potentialInteger >= startNum && potentialInteger <= endNum) {
+                    val integerDistance = calculateDistanceFromNumber(potentialInteger) - (startNum / mNumberUnit.toFloat() * rule.gapPx)
+                    // 如果非常接近整数刻度（误差小于一个细分刻度的1/4），直接使用整数刻度
+                    if (abs(exactPosition - integerDistance) < (rule.gapPx / 4)) {
+                        Log.d("GradationView", "计算值 - 吸附整数刻度: $potentialInteger (${potentialInteger/10f}x), 距离误差=${abs(exactPosition - integerDistance)}")
+                        exactNumber = potentialInteger
+                    }
+                }
+
+                // 检查特殊刻度
+                for (special in mSpecialGradations) {
+                    val specialNum = (special.value * 10).toInt()
+                    if (specialNum >= startNum && specialNum <= endNum) {
+                        val specialDistance = calculateDistanceFromNumber(specialNum) - (startNum / mNumberUnit.toFloat() * rule.gapPx)
+                        // 如果非常接近特殊刻度，直接使用特殊刻度值
+                        if (abs(exactPosition - specialDistance) < (rule.gapPx / 3)) {
+                            Log.d("GradationView", "计算值 - 吸附特殊刻度: $specialNum (${specialNum/10f}x), 距离误差=${abs(exactPosition - specialDistance)}")
+                            exactNumber = specialNum
+                            break  // 找到最近的特殊刻度后退出循环
+                        }
+                    }
+                }
+
                 // 确保结果在当前规则范围内
-                return min(max(exactNumber, startNum), endNum)
+                val result = min(max(exactNumber, startNum), endNum)
+                Log.d("GradationView", "计算值 - 最终结果: $result (${result/10f}x), 原始距离=$distance")
+                return result
             } else {
                 // 超过当前规则范围
                 remainingDistance -= ruleDistance
@@ -1416,7 +1540,38 @@ class RuleView @JvmOverloads constructor(
      */
     fun setSpecialGradations(specialValues: List<SpecialGradationRule>) {
         mSpecialGradations = specialValues.toMutableList()
+        // 特殊刻度改变时，需要重新计算所有可能的吸附点
+        initAllSnapPoints()
         invalidate()
+    }
+
+    /**
+     * 获取当前位置附近所有可能的吸附点
+     * 从缓存中筛选出当前位置附近的吸附点
+     *
+     * @param currentNum 当前值（放大10倍的整数）
+     * @return 可能的吸附点列表
+     */
+    private fun getSnapPoints(currentNum: Int): List<Int> {
+        val snapPoints = mutableListOf<Int>()
+        
+        // 如果缓存为空，先初始化
+        if (mAllSnapPoints.isEmpty()) {
+            initAllSnapPoints()
+        }
+        
+        // 计算相邻两条长刻度线之间的刻度数量
+        val perUnitCount = mNumberUnit * numberPerCount
+        
+        // 从缓存中筛选出当前位置附近的吸附点
+        for (snapPoint in mAllSnapPoints.values) {
+            // 只考虑当前位置附近的吸附点（在一个周期范围内）
+            if (abs(currentNum - snapPoint) < perUnitCount) {
+                snapPoints.add(snapPoint)
+            }
+        }
+        
+        return snapPoints
     }
 
     /**
@@ -1444,65 +1599,44 @@ class RuleView @JvmOverloads constructor(
             return
         }
         
-        // 判断是否靠近长刻度
-        val perUnitCount = mNumberUnit * numberPerCount
+        // 获取所有可能的吸附点
+        val snapPoints = getSnapPoints(currentNum)
         
-        // 检查是否接近长刻度
-        val remainder = currentNum % perUnitCount
-        val distanceToLongGradation = min(remainder, perUnitCount - remainder)
+        // 记录日志，输出可能的吸附点
+        Log.d("GradationView", "可能的吸附点: ${snapPoints.map { it/10f }}")
         
-        // 添加日志，输出刻度检查信息
-        Log.d("GradationView", "刻度检查 - 当前值=$currentNum, 余数=$remainder, 到长刻度距离=$distanceToLongGradation, 单位=$mNumberUnit")
+        // 寻找最近的吸附点
+        var nearestSnapPoint: Int? = null
+        var minDistance = Float.MAX_VALUE
         
-        // 如果接近长刻度，考虑特殊刻度
-        if (distanceToLongGradation < mNumberUnit) {
-            var isNearLongGradation = true
+        for (snapPoint in snapPoints) {
+            val targetDistance = calculateDistanceFromNumber(snapPoint)
+            val distance = abs(targetDistance - mCurrentDistance)
             
-            // 确定最近的长刻度值
-            var nearestLongGradation = currentNum
-            if (remainder < perUnitCount / 2) {
-                nearestLongGradation = currentNum - remainder
-            } else {
-                nearestLongGradation = currentNum + (perUnitCount - remainder)
+            if (distance < minDistance && distance < mSnapTriggerDistance) {
+                minDistance = distance
+                nearestSnapPoint = snapPoint
             }
+        }
+        
+        // 如果找到最近的吸附点且距离足够近，触发吸附
+        if (nearestSnapPoint != null) {
+            val targetDistance = calculateDistanceFromNumber(nearestSnapPoint)
             
-            // 检查特殊刻度
-            val currentValue = currentNum / 10f
-            for (special in mSpecialGradations) {
-                val specialNum = (special.value * 10).toInt()
-                // 如果靠近特殊刻度，使用特殊刻度作为吸附点
-                if (abs(currentNum - specialNum) < mNumberUnit) {
-                    nearestLongGradation = specialNum
-                    isNearLongGradation = true
-                    Log.d("GradationView", "发现特殊刻度 - 特殊值=${special.value}, 当前值=$currentValue")
-                    break
-                }
-            }
+            Log.d("GradationView", "找到最近吸附点 - 值=${nearestSnapPoint/10f}, 目标距离=$targetDistance, 当前距离=$mCurrentDistance, 差值=$minDistance")
             
-            // 如果接近长刻度或特殊刻度，启用吸附
-            if (isNearLongGradation) {
-                // 计算目标距离和当前距离的差值
-                val targetDistance = calculateDistanceFromNumber(nearestLongGradation)
-                val distance = abs(targetDistance - mCurrentDistance)
-                
-                Log.d("GradationView", "长刻度检测 - 最近长刻度=${nearestLongGradation/10f}, 目标距离=$targetDistance, 当前距离=$mCurrentDistance, 差值=$distance")
-                
-                // 如果距离足够近，触发吸附
-                if (distance < mSnapTriggerDistance) {  // 使用dp转px后的值
-                    // 设置吸附状态
-                    isSnapped = true
-                    mSnappedValue = nearestLongGradation
-                    mSnapDirection = if (dx > 0) 1 else -1
-                    
-                    // 记录吸附开始时的触摸位置（关键步骤，使用当前触摸位置）
-                    mLastMoveX = mLastX.toFloat()
-                    
-                    // 直接将当前距离设为目标距离（吸附）
-                    mCurrentDistance = targetDistance
-                    
-                    Log.d("GradationView", "触发吸附 - 吸附值=${nearestLongGradation/10f}, 方向=$mSnapDirection, 吸附位置=$mCurrentDistance, 初始吸附手指位置=$mLastMoveX")
-                }
-            }
+            // 设置吸附状态
+            isSnapped = true
+            mSnappedValue = nearestSnapPoint
+            mSnapDirection = if (dx > 0) 1 else -1
+            
+            // 记录吸附开始时的触摸位置
+            mLastMoveX = mLastX.toFloat()
+            
+            // 直接将当前距离设为目标距离（吸附）
+            mCurrentDistance = targetDistance
+            
+            Log.d("GradationView", "触发吸附 - 吸附值=${nearestSnapPoint/10f}, 方向=$mSnapDirection, 吸附位置=$mCurrentDistance, 初始吸附手指位置=$mLastMoveX")
         }
     }
 }
