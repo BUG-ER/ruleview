@@ -104,7 +104,7 @@ public class MainActivity extends AppCompatActivity {
         rules.add(new RuleView.GradationGapRule(1.0f, 10.0f, 25.0f));
         
         // 设置刻度间隔规则
-        gvRule.setGradationGapRules(rules, 0.0f);
+        gvRule.setGradationGapRules(rules, 1.0f);
 
 
         

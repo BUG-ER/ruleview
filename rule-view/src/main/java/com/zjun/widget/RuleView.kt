@@ -36,8 +36,8 @@ enum class SlideDirection {
          */
         fun fromDelta(dx: Int, threshold: Int = 1): SlideDirection {
             return when {
-                dx > threshold -> RIGHT   // 手指向右移动，刻度向左滑
-                dx < -threshold -> LEFT   // 手指向左移动，刻度向右滑
+                dx >= threshold -> RIGHT   // 手指向右移动，刻度向左滑
+                dx <= -threshold -> LEFT   // 手指向左移动，刻度向右滑
                 else -> NONE  // 无明确方向或移动幅度太小
             }
         }
@@ -291,20 +291,28 @@ class RuleView @JvmOverloads constructor(
     private var isSnapped = false
     
     /** 吸附时的刻度值 */
-    private var mSnappedValue = 0
+    private var mSnappedNumber = 0
     
     /** 吸附时的滑动方向 */
-    private var mSnapDirection: SlideDirection = SlideDirection.NONE
+    private var mSnapSlideDirection: SlideDirection = SlideDirection.NONE
     
     /** 脱离吸附需要的最小距离（像素） */
     private var mSnapEscapeDistance = 0f
 
+    /** 吸附点对应的距离值，用于更精确地判断是否离开吸附点 */
+    private var mSnappedDistance = 0f
+    
     /** 吸附的检测阈值（像素） */
     private var mSnapTriggerDistance = 0f
 
     /** 上一次移动的位置，用于判断方向 */
     private var mLastMoveX = 0f
 
+    /** A是否在当前滑动过程中禁用吸附效果，直到经过某个吸附点 */
+    private var mDisableSnapForThisSlide = false
+    
+    /** 如果禁用吸附，记录最后经过的吸附点值 */
+    private var mLastPassedSnapNumber: Int = -1
 
     /** 记录按下时的时间戳 */
     private var mTouchDownTime: Long = 0
@@ -313,7 +321,7 @@ class RuleView @JvmOverloads constructor(
     private var mLastSnappedTime: Long = 0
     
     /** 记录吸附开始时的吸附值 */
-    private var mLastSnappedValue: Int = 0
+    private var mLastSnappedNumber: Int = 0
 
     /** 所有可能的吸附点集合，缓存起来避免重复计算 */
     private var mAllSnapPoints: MutableMap<Int, Int> = mutableMapOf()
@@ -600,6 +608,17 @@ class RuleView @JvmOverloads constructor(
                 mTouchDownTime = System.currentTimeMillis()
                 // 重置移动标志
                 isMoved = false
+
+//                isSnapped = true
+                // 如果按下时正处于吸附状态，则禁用本次滑动的吸附效果
+                checkAndSnapToLongGradation(0, true)
+                if (isSnapped) {
+                    mDisableSnapForThisSlide = true
+//                    mLastPassedSnapNumber = mSnappedNumber
+//                    mSnappedNumber = -1
+                    Log.d("GradationView", "按下事件 - 在吸附点上，暂时禁用吸附效果: 吸附值=${mSnappedNumber/10f}")
+                }
+
                 // 重置初始移动位置
                 Log.d("GradationView", "按下事件 - 初始位置: x=$x")
             }
@@ -619,23 +638,28 @@ class RuleView @JvmOverloads constructor(
                     // 设置已开始滑动标志
                     isMoved = true
                 }
-                
+
                 // 添加日志，输出滑动信息
                 Log.d("GradationView", "滑动事件 - 偏移量: dx=$dx, 绝对位置: x=$x, mLastX=$mLastX, 当前距离: mCurrentDistance=$mCurrentDistance")
 
                 // 处理方向性吸附
-                if (handleSnap(dx, x, y)) {
+                if (!mDisableSnapForThisSlide && handleSnap(dx, x, y)) {
                     return true
                 }
 
                 mCurrentDistance += -dx.toFloat()
-                
-                // 检查是否需要吸附到长刻度
-                checkAndSnapToLongGradation(dx)
-                
+
+                // 检查是否禁用了吸附，如果禁用了需要检查是否经过了某个吸附点
+                if (mDisableSnapForThisSlide) {
+                    checkIfPassedSnapPoint()
+                } else {
+                    // 非禁用状态，正常检查吸附
+                    checkAndSnapToLongGradation(dx)
+                }
+
                 // 计算新的当前值
                 calculateValue()
-                
+
                 // 只有在非吸附状态下才更新最后移动的位置
                 if (!isSnapped) {
                     mLastMoveX = x.toFloat()
@@ -643,6 +667,7 @@ class RuleView @JvmOverloads constructor(
                 }
             }
             MotionEvent.ACTION_UP -> {
+                resetSnapStatus()
                 if (!isMoved) {
                     // 计算触摸持续时间
                     val touchDuration = System.currentTimeMillis() - mTouchDownTime
@@ -653,10 +678,6 @@ class RuleView @JvmOverloads constructor(
                         true
                     }
                 }
-
-                // 重置吸附状态
-                isSnapped = false
-                mSnapDirection = SlideDirection.NONE
 
                 // 处理滑动结束（手指抬起）
                 // 计算滑动速度，用于惯性滑动
@@ -673,15 +694,12 @@ class RuleView @JvmOverloads constructor(
                 }
             }
             MotionEvent.ACTION_CANCEL -> {
+                resetSnapStatus()
                 // 处理取消事件，与UP事件相同
                 if (!isMoved) {
                     // 这是一个点击被取消的事件，保持当前位置不变
                     return true
                 }
-
-                // 重置吸附状态
-                isSnapped = false
-                mSnapDirection = SlideDirection.NONE
 
                 // 处理滑动被取消（类似手指抬起）
                 mVelocityTracker!!.computeCurrentVelocity(1000, MAX_FLING_VELOCITY.toFloat())
@@ -700,6 +718,15 @@ class RuleView @JvmOverloads constructor(
         mLastX = x
         mLastY = y
         return true
+    }
+
+    fun resetSnapStatus() {
+        // 重置吸附状态
+//        isSnapped = false
+        mSnapSlideDirection = SlideDirection.NONE
+//        mDisableSnapForThisSlide = false
+//        mLastPassedSnapNumber = -1
+        mSnappedDistance = 0f  // 重置吸附点距离
     }
 
     /**
@@ -722,23 +749,20 @@ class RuleView @JvmOverloads constructor(
             val currentDirection = SlideDirection.fromDelta(dx)
 
             // 如果有明确的滑动方向，并且与吸附方向相反，立即解除吸附
-            if (currentDirection != SlideDirection.NONE && currentDirection != mSnapDirection) {
+            if (currentDirection != SlideDirection.NONE && currentDirection != mSnapSlideDirection) {
                 isSnapped = false
-                Log.d("GradationView", "滑动事件 - 方向改变，解除吸附: 新方向=$currentDirection, 原方向=$mSnapDirection, 起始位置=$mLastMoveX,   mSnappedValue=${mSnappedValue}  当前位置=$x")
+                Log.d("GradationView", "滑动事件 - 方向改变，解除吸附: 新方向=$currentDirection, 原方向=$mSnapSlideDirection, 起始位置=$mLastMoveX,   mSnappedValue=${mSnappedNumber}  当前位置=$x")
 
-                // 保存当前的吸附值，防止立即再次吸附到同一位置
-                val lastSnappedValue = mSnappedValue
-                mSnapDirection = SlideDirection.NONE
-
+                mSnapSlideDirection = SlideDirection.NONE
                 // 添加临时锁定逻辑，防止立即再次吸附
                 mLastSnappedTime = System.currentTimeMillis()
-                mLastSnappedValue = lastSnappedValue
+                mLastSnappedNumber = mSnappedNumber
             } else {
                 // 同方向滑动，检查从原始吸附位置移动的总距离
                 val movedDistance = abs(x - mLastMoveX)
 
                 // 添加日志，输出吸附状态信息
-                Log.d("GradationView", "滑动事件 - 吸附状态:   dx ${dx} currentDirection  ${currentDirection} mSnapDirection ${mSnapDirection} movedDistance=$movedDistance, 阈值=$mSnapEscapeDistance, 吸附值=${mSnappedValue/10f}, 起始位置=$mLastMoveX, 当前位置=$x, 方向=$currentDirection")
+                Log.d("GradationView", "滑动事件 - 吸附状态:   dx ${dx} currentDirection  ${currentDirection} mSnapDirection ${mSnapSlideDirection} movedDistance=$movedDistance, 阈值=$mSnapEscapeDistance, 吸附值=${mSnappedNumber/10f}, 起始位置=$mLastMoveX, 当前位置=$x, 方向=$currentDirection")
 
                 // 如果移动距离未超过阈值，保持在吸附位置
                 if (movedDistance < mSnapEscapeDistance) {
@@ -748,16 +772,10 @@ class RuleView @JvmOverloads constructor(
                 } else {
                     // 超过阈值，解除吸附
                     isSnapped = false
-                    mSnapDirection = SlideDirection.NONE
-
-                    // 保存当前的吸附值，防止立即再次吸附到同一位置
-                    val lastSnappedValue = mSnappedValue
-
-                    Log.d("GradationView", "滑动事件 - 移动距离超过阈值，解除吸附: movedDistance=$movedDistance, 吸附值=${lastSnappedValue/10f}, 起始位置=$mLastMoveX")
-
-                    // 添加临时锁定逻辑，防止立即再次吸附
+                    mSnapSlideDirection = SlideDirection.NONE
                     mLastSnappedTime = System.currentTimeMillis()
-                    mLastSnappedValue = lastSnappedValue
+                    mLastSnappedNumber = mSnappedNumber
+                    Log.d("GradationView", "滑动事件 - 移动距离超过阈值，解除吸附: movedDistance=$movedDistance, 吸附值=${mSnappedNumber/10f}, 起始位置=$mLastMoveX")
                 }
             }
         }
@@ -1674,9 +1692,9 @@ class RuleView @JvmOverloads constructor(
      * 
      * @param dx 当前X方向移动的距离，用于判断滑动方向
      */
-    private fun checkAndSnapToLongGradation(dx: Int) {
-        // 如果已经处于吸附状态，不需要检查
-        if (isSnapped) {
+    private fun checkAndSnapToLongGradation(dx: Int, isDownEvent: Boolean = false) {
+        // 如果已经处于吸附状态 或 本次滑动禁用吸附，则不检查
+        if (isSnapped || mDisableSnapForThisSlide) {
             return
         }
         
@@ -1688,8 +1706,8 @@ class RuleView @JvmOverloads constructor(
         val timeSinceLastSnap = currentTime - mLastSnappedTime
         
         // 如果距离上次吸附时间过短且当前值接近上次吸附值，则跳过吸附
-        if (timeSinceLastSnap < 300 && abs(currentNum - mLastSnappedValue) <= mNumberUnit) {
-            Log.d("GradationView", "忽略吸附 - 刚刚解除吸附: 时间差=$timeSinceLastSnap ms, 当前值=$currentNum, 上次吸附值=$mLastSnappedValue")
+        if (timeSinceLastSnap < 300 && abs(currentNum - mLastSnappedNumber) <= mNumberUnit) {
+            Log.d("GradationView", "忽略吸附 - 刚刚解除吸附: 时间差=$timeSinceLastSnap ms, 当前值=$currentNum, 上次吸附值=$mLastSnappedNumber")
             return
         }
         
@@ -1721,16 +1739,64 @@ class RuleView @JvmOverloads constructor(
             
             // 设置吸附状态
             isSnapped = true
-            mSnappedValue = nearestSnapPoint
-            mSnapDirection = SlideDirection.fromDelta(dx)
+            mSnappedNumber = nearestSnapPoint
+            mSnapSlideDirection = SlideDirection.fromDelta(dx)
+
+            if (!isDownEvent) {
+                // 记录吸附开始时的触摸位置
+                mLastMoveX = mLastX.toFloat()
+
+                // 直接将当前距离设为目标距离（吸附）
+                mCurrentDistance = targetDistance
+            }
             
-            // 记录吸附开始时的触摸位置
-            mLastMoveX = mLastX.toFloat()
+            Log.d("GradationView", "触发吸附 - 吸附值=${nearestSnapPoint/10f}, 方向=$mSnapSlideDirection, 吸附位置=$mCurrentDistance, 初始吸附手指位置=$mLastMoveX")
+        }
+    }
+
+    /**
+     * 检查是否已离开最初的吸附点
+     * 当从吸附点开始滑动并离开该点后，恢复吸附功能
+     * 使用distance距离变化而非number值来判断，提高精度
+     */
+    private fun checkIfPassedSnapPoint() {
+        // 如果没有禁用吸附功能，无需检查
+        if (!mDisableSnapForThisSlide) {
+            return
+        }
+        
+        // 如果没有记录上次吸附的距离，就记录当前位置
+        if (mSnappedDistance <= 0f) {
+            // 在第一次调用时，初始化吸附点的距离
+            // 如果存在吸附值，则获取其对应的距离
+            if (mSnappedNumber > 0) {
+                mSnappedDistance = calculateDistanceFromNumber(mSnappedNumber)
+                Log.d("GradationView", "checkIfPassedSnapPoint()  初始化吸附点距离: 吸附值=${mSnappedNumber/10f}, 对应距离=$mSnappedDistance")
+            } else {
+                // 如果没有有效的吸附值，使用当前距离
+                mSnappedDistance = mCurrentDistance
+                Log.d("GradationView", "checkIfPassedSnapPoint()   初始化吸附点距离: 使用当前距离=$mCurrentDistance")
+            }
+        }
+        
+        // 计算当前位置与吸附点的距离差异（像素）
+        val distanceDifference = abs(mCurrentDistance - mSnappedDistance)
+        
+        // 定义一个适当的像素阈值，当移动超过这个距离时重新启用吸附
+        // 使用一个更直观的物理距离作为判断标准，而不是刻度单位
+        val distanceThreshold = mSnapTriggerDistance / 2
+        
+        // 如果已经离开初始吸附点一定距离
+        if (distanceDifference > distanceThreshold) {
+            // 重新启用吸附功能
+            mDisableSnapForThisSlide = false
             
-            // 直接将当前距离设为目标距离（吸附）
-            mCurrentDistance = targetDistance
+            // 清除记录的吸附距离，避免影响下次判断
+            mSnappedDistance = 0f
             
-            Log.d("GradationView", "触发吸附 - 吸附值=${nearestSnapPoint/10f}, 方向=$mSnapDirection, 吸附位置=$mCurrentDistance, 初始吸附手指位置=$mLastMoveX")
+            Log.d("GradationView", "checkIfPassedSnapPoint()   已离开初始吸附点 - 重新启用吸附功能: 初始吸附距离=$mSnappedDistance, 当前距离=$mCurrentDistance, 差值=$distanceDifference, 阈值=$distanceThreshold")
+        } else {
+            Log.d("GradationView", "checkIfPassedSnapPoint()   仍在初始吸附点附近 - 继续禁用吸附: 初始吸附距离=$mSnappedDistance, 当前距离=$mCurrentDistance, 差值=$distanceDifference, 阈值=$distanceThreshold")
         }
     }
 }
