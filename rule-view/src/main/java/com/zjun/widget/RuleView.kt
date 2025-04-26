@@ -451,7 +451,7 @@ class RuleView @JvmOverloads constructor(
         
         // 计算吸附相关的距离，8dp和5dp转为像素
         mSnapEscapeDistance = dp2px(17f).toFloat()
-        mSnapTriggerDistance = dp2px(3f).toFloat()
+        mSnapTriggerDistance = dp2px(2f).toFloat()
         
         Log.d("GradationView", "初始化 - 吸附脱离距离: ${mSnapEscapeDistance}px (12dp), 吸附触发距离: ${mSnapTriggerDistance}px (3dp)")
         
@@ -1784,7 +1784,7 @@ class RuleView @JvmOverloads constructor(
         
         // 定义一个适当的像素阈值，当移动超过这个距离时重新启用吸附
         // 使用一个更直观的物理距离作为判断标准，而不是刻度单位
-        val distanceThreshold = mSnapTriggerDistance / 2
+        val distanceThreshold = mSnapTriggerDistance * 2
         
         // 如果已经离开初始吸附点一定距离
         if (distanceDifference > distanceThreshold) {
