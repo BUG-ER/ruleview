@@ -624,57 +624,11 @@ class RuleView @JvmOverloads constructor(
                 Log.d("GradationView", "滑动事件 - 偏移量: dx=$dx, 绝对位置: x=$x, mLastX=$mLastX, 当前距离: mCurrentDistance=$mCurrentDistance")
 
                 // 处理方向性吸附
-                if (isSnapped) {
-                    // 计算当前滑动方向（只考虑有效的移动）
-                    val currentDirection = SlideDirection.fromDelta(dx)
-
-                    // 如果有明确的滑动方向，并且与吸附方向相反，立即解除吸附
-                    if (currentDirection != SlideDirection.NONE && currentDirection != mSnapDirection) {
-                        isSnapped = false
-                        Log.d("GradationView", "滑动事件 - 方向改变，解除吸附: 新方向=$currentDirection, 原方向=$mSnapDirection, 起始位置=$mLastMoveX,   mSnappedValue=${mSnappedValue}  当前位置=$x")
-                        
-                        // 保存当前的吸附值，防止立即再次吸附到同一位置
-                        val lastSnappedValue = mSnappedValue
-                        mSnapDirection = SlideDirection.NONE
-                        
-                        // 添加临时锁定逻辑，防止立即再次吸附
-                        mLastSnappedTime = System.currentTimeMillis()
-                        mLastSnappedValue = lastSnappedValue
-                    } else {
-                        // 同方向滑动，检查从原始吸附位置移动的总距离
-                        val movedDistance = abs(x - mLastMoveX)
-                        
-                        // 添加日志，输出吸附状态信息
-                        Log.d("GradationView", "滑动事件 - 吸附状态:   dx ${dx} currentDirection  ${currentDirection}  movedDistance=$movedDistance, 阈值=$mSnapEscapeDistance, 吸附值=${mSnappedValue/10f}, 起始位置=$mLastMoveX, 当前位置=$x, 方向=$currentDirection")
-                        
-                        // 如果移动距离未超过阈值，保持在吸附位置
-                        if (movedDistance < mSnapEscapeDistance) {
-                            mLastX = x
-                            mLastY = y
-                            return true
-                        } else {
-                            // 超过阈值，解除吸附
-                            isSnapped = false
-                            mSnapDirection = SlideDirection.NONE
-                            
-                            // 保存当前的吸附值，防止立即再次吸附到同一位置
-                            val lastSnappedValue = mSnappedValue
-                            
-                            Log.d("GradationView", "滑动事件 - 移动距离超过阈值，解除吸附: movedDistance=$movedDistance, 吸附值=${lastSnappedValue/10f}, 起始位置=$mLastMoveX")
-                            
-                            // 添加临时锁定逻辑，防止立即再次吸附
-                            mLastSnappedTime = System.currentTimeMillis()
-                            mLastSnappedValue = lastSnappedValue
-                        }
-                    }
+                if (handleSnap(dx, x, y)) {
+                    return true
                 }
 
-                // 更新当前距离（注意dx取反，手指右滑，刻度左移）
-                val oldDistance = mCurrentDistance
                 mCurrentDistance += -dx.toFloat()
-                
-                // 添加日志，输出距离变化
-                Log.d("GradationView", "滑动事件 - 距离更新: 旧距离=$oldDistance, 新距离=$mCurrentDistance, 变化=${-dx.toFloat()}")
                 
                 // 检查是否需要吸附到长刻度
                 checkAndSnapToLongGradation(dx)
@@ -746,6 +700,68 @@ class RuleView @JvmOverloads constructor(
         mLastX = x
         mLastY = y
         return true
+    }
+
+    /**
+     * 处理刻度吸附状态和相关滑动行为
+     * 
+     * 该方法负责管理已经处于吸附状态的刻度尺的行为:
+     * 1. 检测用户滑动方向变化，若方向改变则立即解除吸附
+     * 2. 计算用户在同方向上的滑动距离，超过阈值则解除吸附
+     * 3. 当吸附状态被解除时，记录相关信息防止短时间内重新吸附
+     * 4. 返回true表示事件已被处理，当前滑动应被忽略，维持在吸附位置
+     * 
+     * @param dx 当前X方向滑动的增量，负值表示向左滑动，正值表示向右滑动
+     * @param x 当前触摸事件的X坐标
+     * @param y 当前触摸事件的Y坐标
+     * @return 如果事件已被吸附处理则返回true，否则返回false继续处理常规滑动
+     */
+    private fun handleSnap(dx: Int, x: Int, y: Int) : Boolean{
+        if (isSnapped) {
+            // 计算当前滑动方向（只考虑有效的移动）
+            val currentDirection = SlideDirection.fromDelta(dx)
+
+            // 如果有明确的滑动方向，并且与吸附方向相反，立即解除吸附
+            if (currentDirection != SlideDirection.NONE && currentDirection != mSnapDirection) {
+                isSnapped = false
+                Log.d("GradationView", "滑动事件 - 方向改变，解除吸附: 新方向=$currentDirection, 原方向=$mSnapDirection, 起始位置=$mLastMoveX,   mSnappedValue=${mSnappedValue}  当前位置=$x")
+
+                // 保存当前的吸附值，防止立即再次吸附到同一位置
+                val lastSnappedValue = mSnappedValue
+                mSnapDirection = SlideDirection.NONE
+
+                // 添加临时锁定逻辑，防止立即再次吸附
+                mLastSnappedTime = System.currentTimeMillis()
+                mLastSnappedValue = lastSnappedValue
+            } else {
+                // 同方向滑动，检查从原始吸附位置移动的总距离
+                val movedDistance = abs(x - mLastMoveX)
+
+                // 添加日志，输出吸附状态信息
+                Log.d("GradationView", "滑动事件 - 吸附状态:   dx ${dx} currentDirection  ${currentDirection} mSnapDirection ${mSnapDirection} movedDistance=$movedDistance, 阈值=$mSnapEscapeDistance, 吸附值=${mSnappedValue/10f}, 起始位置=$mLastMoveX, 当前位置=$x, 方向=$currentDirection")
+
+                // 如果移动距离未超过阈值，保持在吸附位置
+                if (movedDistance < mSnapEscapeDistance) {
+                    mLastX = x
+                    mLastY = y
+                    return true
+                } else {
+                    // 超过阈值，解除吸附
+                    isSnapped = false
+                    mSnapDirection = SlideDirection.NONE
+
+                    // 保存当前的吸附值，防止立即再次吸附到同一位置
+                    val lastSnappedValue = mSnappedValue
+
+                    Log.d("GradationView", "滑动事件 - 移动距离超过阈值，解除吸附: movedDistance=$movedDistance, 吸附值=${lastSnappedValue/10f}, 起始位置=$mLastMoveX")
+
+                    // 添加临时锁定逻辑，防止立即再次吸附
+                    mLastSnappedTime = System.currentTimeMillis()
+                    mLastSnappedValue = lastSnappedValue
+                }
+            }
+        }
+        return false
     }
 
     /**
@@ -1642,10 +1658,21 @@ class RuleView @JvmOverloads constructor(
     }
 
     /**
-     * 检查并吸附到长刻度
-     * 当滑动经过长刻度点时，会有吸附效果
+     * 检查并吸附到长刻度或特殊刻度
      * 
-     * @param dx 当前X方向移动的距离
+     * 该方法实现了刻度尺的智能吸附功能:
+     * 1. 当用户滑动经过长刻度或特殊刻度点时，检测是否满足吸附条件
+     * 2. 使用距离阈值(mSnapTriggerDistance)判断是否足够接近刻度点
+     * 3. 实现防反弹机制，避免短时间内反复吸附同一位置
+     * 4. 找到最佳吸附点后，记录相关状态并将视图位置调整到精确的刻度点
+     * 
+     * 吸附过程包含:
+     * - 计算当前值和可能的吸附点
+     * - 确定最近的符合条件的吸附点
+     * - 设置吸附状态和记录滑动方向
+     * - 直接调整当前位置到吸附点位置
+     * 
+     * @param dx 当前X方向移动的距离，用于判断滑动方向
      */
     private fun checkAndSnapToLongGradation(dx: Int) {
         // 如果已经处于吸附状态，不需要检查
