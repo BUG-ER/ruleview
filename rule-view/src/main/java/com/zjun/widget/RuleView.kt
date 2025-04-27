@@ -343,7 +343,7 @@ class RuleView @JvmOverloads constructor(
     private var mLastVibratedNumber: Int = -1
 
     /** 所有可能的吸附点集合，缓存起来避免重复计算 */
-    private var mAllSnapPoints: MutableMap<Int, Int> = mutableMapOf()
+    private var mAllSnapPoints: MutableSet<Int> = mutableSetOf()
 
     @Deprecated("请使用 {@link IOnValueChangedListener} 代替")
     interface OnValueChangedListener : IOnValueChangedListener
@@ -498,7 +498,7 @@ class RuleView @JvmOverloads constructor(
         var currentNum = (mMinNumber / perUnitCount) * perUnitCount
         while (currentNum <= mMaxNumber) {
             if (currentNum >= mMinNumber) {
-                mAllSnapPoints[currentNum] = currentNum
+                mAllSnapPoints.add(currentNum)
             }
             currentNum += perUnitCount
         }
@@ -508,7 +508,7 @@ class RuleView @JvmOverloads constructor(
             val specialNum = (special.value * 10).toInt()
             // 只添加有效范围内的特殊刻度
             if (specialNum >= mMinNumber && specialNum <= mMaxNumber) {
-                mAllSnapPoints[specialNum] = specialNum
+                mAllSnapPoints.add(specialNum)
             }
         }
 
@@ -1692,7 +1692,7 @@ class RuleView @JvmOverloads constructor(
         val perUnitCount = mNumberUnit * numberPerCount
 
         // 从缓存中筛选出当前位置附近的吸附点
-        for (snapPoint in mAllSnapPoints.values) {
+        for (snapPoint in mAllSnapPoints) {
             // 只考虑当前位置附近的吸附点（在一个周期范围内）
             if (abs(currentNum - snapPoint) < perUnitCount) {
                 snapPoints.add(snapPoint)
